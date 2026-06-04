@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Catalog, type PackageRow, type Product } from './db.js';
 import { scanDir } from './scan.js';
 import { projectGuids, matchPackages } from './detect.js';
-import { diffImport, formatDiffText } from './diff.js';
+import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
 import { renderPackage, findUnity, findLilToon, findPoiyomi } from './render.js';
 
 type Proj = { name: string; path: string; pct: number };
@@ -74,8 +74,12 @@ async function main(): Promise<void> {
         const all = args.includes('--all');
         const projFlagIdx = args.indexOf('--project');
         const explicitProj = projFlagIdx >= 0 ? args[projFlagIdx + 1] : undefined;
-        const projValIdx = projFlagIdx >= 0 ? projFlagIdx + 1 : -1; // --project無し時に位置引数(=パッケージ)を捨てないように
-        const packageFile = args.find((a, i) => !a.startsWith('--') && i !== projValIdx);
+        const htmlIdx = args.indexOf('--html');
+        const htmlOut = htmlIdx >= 0 ? args[htmlIdx + 1] : undefined;
+        // 値を取るフラグ(--project/--html)の「次の引数」は位置引数(=パッケージ)から除外
+        const skip = new Set<number>();
+        for (const fi of [projFlagIdx, htmlIdx]) if (fi >= 0) skip.add(fi + 1);
+        const packageFile = args.find((a, i) => !a.startsWith('--') && !skip.has(i));
         if (!packageFile) return fail('usage: diff <package.unitypackage> --project <projectDir> [--all] [--json]');
         if (!existsSync(packageFile)) return fail('パッケージが見つかりません: ' + packageFile);
         const products = cat.allPackageGuids();
@@ -100,6 +104,7 @@ async function main(): Promise<void> {
         if (!reports.length) return fail('対象プロジェクトがありません');
         if (json) console.log(JSON.stringify(reports.length === 1 ? reports[0] : reports, null, 2));
         else reports.forEach((r, i) => { if (i) console.log(''); console.log(formatDiffText(r)); });
+        if (htmlOut) { writeFileSync(htmlOut, formatDiffHtmlPage(reports), 'utf8'); console.log(`\nレポート(HTML): ${htmlOut}`); }
         break;
       }
       case 'installs': {
@@ -261,7 +266,7 @@ async function main(): Promise<void> {
         console.log('  reclaim [out.ps1]                重複コピー削減プラン(可逆=quarantine移動)を書出し ※削除はしない');
         console.log('  scan <libraryDir>                .unitypackage を解析しカタログ登録(+preview抽出)');
         console.log('  list / search <query>            一覧 / 検索');
-        console.log('  diff <pkg> --project <dir>       取り込み前チェック: 何を上書き/足りないシェーダ(--json/--all)');
+        console.log('  diff <pkg> --project <dir>       取り込み前チェック: 何を上書き/足りないシェーダ(--json/--all/--html out.html)');
         console.log('  detect [--save] <projectDir...>  導入済みか逆引き（--saveで記録）');
         console.log('  installs                         パッケージ→導入先一覧（重複導入警告）');
         console.log('  catalog [out.html]               カタログ(クリックで詳細: 中身/プレビュー/導入台帳)を生成');

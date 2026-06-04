@@ -151,6 +151,15 @@ export async function diffImport(packageFile: string, projectRoot: string, produ
   };
 }
 
+// 共有lib衝突の「結果」説明。Packages/(不変)は上書きでなく無視される＝文言を分岐。テキスト/HTML両方で共用。
+function conseq(c: Conflict): string {
+  if (c.existingPath?.startsWith('Packages/'))
+    return `VPMで導入済み(${c.existingPath})。同梱版はGUID重複扱い→参照ずれ/コンソールエラーの恐れ。同梱フォルダは外すのが安全`;
+  if (c.existingPath && c.existingPath !== c.incomingPath)
+    return `別の場所に既存(${c.existingPath})＝GUID二重定義の恐れ`;
+  return `あなたの ${c.existingPath} を上書き(版が違えばダウングレード)`;
+}
+
 // ---------- テキスト整形(CLI) ----------
 export function formatDiffText(r: DiffReport): string {
   const L: string[] = [];
@@ -169,14 +178,7 @@ export function formatDiffText(r: DiffReport): string {
     L.push(`🔴 共有シェーダ/ライブラリの衝突 (${r.sharedOverwrite.length})${shaders.length ? '  ＝シェーダ競合/ピンク化の恐れ' : ''}`);
     for (const c of r.sharedOverwrite.slice(0, 12)) {
       L.push(`    [${c.shared}] ${c.incomingPath}`);
-      if (c.existingPath?.startsWith('Packages/')) {
-        // Packages/ は不変。Unityは同梱版を取り込まず無視し、VPM版が残る。だが同梱マテリアル等がGUID重複で参照ずれ/エラーを起こしうる。
-        L.push(`        → VPMで導入済み(${c.existingPath})。同梱版はGUID重複扱い→参照ずれ/コンソールエラーの恐れ。同梱フォルダは外すのが安全`);
-      } else if (c.existingPath && c.existingPath !== c.incomingPath) {
-        L.push(`        → 別の場所に既存(${c.existingPath})＝GUID二重定義の恐れ`);
-      } else {
-        L.push(`        → あなたの ${c.existingPath} を上書き(版が違えばダウングレード)`);
-      }
+      L.push(`        → ${conseq(c)}`);
     }
     if (r.sharedOverwrite.length > 12) L.push(`    … 他 ${r.sharedOverwrite.length - 12} 件`);
     if (!r.benignReimport) L.push(`    対策: Unityのインポート窓で該当フォルダのチェックを外す(互換版を既に所持の場合)`);
@@ -216,4 +218,68 @@ export function formatDiffText(r: DiffReport): string {
     L.push(`推奨アンチェック: ${r.uncheckFolders.slice(0, 6).join(' , ')}`);
   }
   return L.join('\n');
+}
+
+// ---------- 自己完結HTMLレポート(共有用・--html) ----------
+const HTML_ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+function esc(s: string): string { return String(s).replace(/[&<>"]/g, m => HTML_ESC[m]!); }
+
+function diffHtmlBody(r: DiffReport): string {
+  const vt = r.verdict === 'danger' ? '⚠ 危険 — 取り込み前に確認を' : r.verdict === 'review' ? '△ レビュー推奨' : '✓ 衝突なし — 安全に取り込めます';
+  let h = `<div class="rep"><div class="rhead"><b>${esc(r.fileName)}</b><span class="proj">→ ${esc(r.projectRoot)}</span></div>`;
+  h += `<div><span class="dv ${r.verdict}">${vt}</span></div>`;
+  h += `<div class="dinfo">取り込み ${r.incomingCount} アセット → 新規 ${r.newCount} / 上書き ${r.sharedOverwrite.length + r.guidOverwrite.length}${r.pathClash.length ? ` / パス衝突 ${r.pathClash.length}` : ''}</div>`;
+  if (r.looksLikeUpdateOf?.installedHere)
+    h += `<div class="dinfo">ℹ 既知商品「${esc(r.looksLikeUpdateOf.product)}」と一致(${r.looksLikeUpdateOf.overlapPct}%)${r.benignReimport ? ' → 同じ場所への再取込＝想定内' : ' だが下記の競合あり'}</div>`;
+  if (r.sharedOverwrite.length) {
+    h += `<div class="dsec"><h4 class="red">🔴 共有シェーダ/ライブラリの衝突 (${r.sharedOverwrite.length})</h4>`;
+    h += r.sharedOverwrite.slice(0, 20).map(c => `<div class="dconf">[${esc(c.shared ?? '')}] ${esc(c.incomingPath)}<span class="sub">→ ${esc(conseq(c))}</span></div>`).join('');
+    if (r.sharedOverwrite.length > 20) h += `<div class="dinfo">… 他 ${r.sharedOverwrite.length - 20} 件</div>`;
+    h += '</div>';
+  }
+  if (r.missingShader.length) {
+    h += `<div class="dsec"><h4 class="purple">🟣 必要シェーダの欠落 (${r.missingShader.length}) ＝入れないとピンク</h4>`;
+    h += r.missingShader.map(s => `<div class="dconf">この商品は ${esc(s)} が必要ですが、対象プロジェクトに見当たりません → 先に ${esc(s)} を導入</div>`).join('');
+    h += '</div>';
+  } else if (r.requires.liltoon || r.requires.poiyomi) {
+    const need = [r.requires.liltoon ? 'lilToン' : '', r.requires.poiyomi ? 'Poiyomi' : ''].filter(Boolean).join('+');
+    h += `<div class="dsec"><h4 class="green">🟣 必要シェーダ: OK</h4><div class="dinfo">${esc(need)} は対象プロジェクトに存在</div></div>`;
+  }
+  if (r.guidOverwrite.length) {
+    h += `<div class="dsec"><h4 class="orange">🟠 その他の上書き (${r.guidOverwrite.length})${r.benignReimport ? ' （更新版＝想定内）' : ''}</h4>`;
+    h += r.guidOverwrite.slice(0, 15).map(c => `<div class="dconf">${esc(c.incomingPath)}<span class="sub">→ ${esc(c.existingPath ?? '')}</span></div>`).join('');
+    if (r.guidOverwrite.length > 15) h += `<div class="dinfo">… 他 ${r.guidOverwrite.length - 15} 件</div>`;
+    h += '</div>';
+  }
+  if (r.pathClash.length) {
+    h += `<div class="dsec"><h4 class="yellow">🟡 パス衝突(別GUIDが同じ場所へ) (${r.pathClash.length}) ＝参照切れの恐れ</h4>`;
+    h += r.pathClash.slice(0, 15).map(c => `<div class="dconf">${esc(c.incomingPath)}</div>`).join('');
+    h += '</div>';
+  }
+  if (r.uncheckFolders.length && !r.benignReimport)
+    h += `<div class="duncheck"><b>推奨アンチェック</b>（Unityのインポート窓で外すと安全）:<br>${r.uncheckFolders.slice(0, 8).map(esc).join(' ， ')}</div>`;
+  h += '</div>';
+  return h;
+}
+
+export function formatDiffHtmlPage(reports: DiffReport[]): string {
+  const body = reports.map(diffHtmlBody).join('\n');
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hangar 取り込み前チェック</title><style>
+:root{color-scheme:dark}body{margin:0;background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-serif;font-size:13px;line-height:1.6}
+header{padding:14px 20px;border-bottom:1px solid #2a2a32}header h1{font-size:15px;margin:0}header .sub{color:#888;font-size:12px}
+.wrap{padding:18px 20px;max-width:980px}
+.rep{background:#1b1b20;border:1px solid #2a2a32;border-radius:12px;padding:14px 18px;margin-bottom:16px}
+.rhead{margin-bottom:8px}.rhead b{font-size:14px;word-break:break-all}.rhead .proj{color:#9a9aa2;font-size:12px;margin-left:8px;word-break:break-all}
+.dv{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700}
+.dv.danger{background:#5a2330;color:#ff9aa8}.dv.review{background:#4a3a23;color:#e7c89a}.dv.clean{background:#234a3a;color:#9ae7c2}
+.dsec{margin-top:14px}.dsec h4{margin:0 0 6px;font-size:13px}
+.dconf{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#cfcfd6;padding:3px 0;border-bottom:1px solid #222228;word-break:break-all}
+.dconf .sub{color:#9a9aa2;display:block;padding-left:14px}
+.dinfo{color:#9aa;font-size:12px;margin:5px 0}
+.duncheck{margin-top:14px;background:#23232b;border:1px solid #2f2f39;border-radius:8px;padding:10px 12px;font-size:12px;color:#cfcfd6}
+.red{color:#ff9aa8}.purple{color:#c3b6ff}.orange{color:#e7c89a}.yellow{color:#e7e0a6}.green{color:#9ae7c2}
+</style></head><body>
+<header><h1>Hangar — 取り込み前チェック</h1><div class="sub">VRChat .unitypackage を取り込む前の競合レポート ・ ローカル生成・読み取り専用</div></header>
+<div class="wrap">${body}</div>
+</body></html>`;
 }
