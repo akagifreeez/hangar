@@ -1,0 +1,36 @@
+# 依存・ビルド出力
+node_modules/
+dist/
+release/
+
+# 配布物に同梱しない（再配布回避・容量）: ローカルレンダ用のシェーダ実体
+_shaders/
+_renderproj/
+
+# 生成物・キャッシュ・DB（ユーザーデータ。リポジトリに入れない）
+cache/
+*.db
+*.db-wal
+*.db-shm
+gui-catalog.html
+*-catalog.html
+reclaim_plan.ps1
+
+# 購入アセットは絶対にコミットしない（他者の有料物の再配布になる）
+*.unitypackage
+
+# 開発時の一時物・スモーク
+gui_smoke.png
+smoke.log
+probe.txt
+_cover_check.png
+app/probe*.cjs
+
+# アイコンは build/icon.* だけ残し、それ以外(中間HTML等)は除外
+build/*
+!build/icon.png
+!build/icon.ico
+
+# 内部用の作業ドキュメント（公開リポジトリには載せない・手元に残す）
+商品化チェックリスト.md
+配布用テキスト.md

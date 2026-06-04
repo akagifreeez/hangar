@@ -1,0 +1,95 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-serif;display:flex;flex-direction:column;overflow:hidden}
+#bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #2a2a32;background:#1b1b20;flex:0 0 auto}
+#bar h1{font-size:14px;margin:0 10px 0 2px;font-weight:600}
+button{background:#4a6cf7;color:#fff;border:0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer}
+button.sec{background:#2a2a34;color:#ddd}
+button:hover:not(:disabled){filter:brightness(1.12)}
+button:disabled{opacity:.4;cursor:not-allowed}
+input{background:#2a2a34;border:1px solid #3a3a44;color:#ddd;border-radius:6px;padding:6px 8px;font-size:12px}
+#status{margin-left:auto;color:#9a9aa2;font-size:12px;max-width:46%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tag{color:#6a6a72;font-size:11px;border:1px solid #2a2a32;border-radius:99px;padding:2px 8px;white-space:nowrap}
+iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
+#empty{flex:1 1 auto;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#9a9aa2;text-align:center;padding:40px}
+#empty h2{color:#e8e8ea;font-size:20px;margin:0}
+#empty p{margin:0;font-size:13px;line-height:1.7;max-width:520px}
+#empty .big{background:#4a6cf7;font-size:15px;padding:12px 22px}
+.kbd{background:#2a2a34;border:1px solid #3a3a44;border-radius:4px;padding:1px 6px;font-size:11px;color:#cfcfd6}
+</style></head><body>
+<div id="bar">
+  <h1>Hangar</h1>
+  <button id="scan">📁 ライブラリをスキャン</button>
+  <button id="detect" class="sec">🎯 プロジェクト検出</button>
+  <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む">🔄 再スキャン</button>
+  <input id="rname" placeholder="3D生成する商品名…" style="width:150px">
+  <button id="render" class="sec" title="">🎬 3D生成</button>
+  <span class="tag">VRChat非公式・ローカル限定</span>
+  <span id="status">準備完了</span>
+</div>
+<div id="empty">
+  <h2>ようこそ Hangar へ</h2>
+  <p>VRChatの <span class="kbd">.unitypackage</span> を <b>展開せず</b>に棚卸し・プレビュー・導入追跡するツールです。<br>
+  すべて<b>ローカルのみ・読み取り専用</b>で動作し、外部送信・スクレイピング・改変は一切しません。</p>
+  <button id="scan2" class="big">📁 まずライブラリ(BOOTH等の保存先)をスキャン</button>
+  <p style="color:#6a6a72;font-size:12px">フォルダを選ぶと、中の .unitypackage を再帰的に解析してカタログ化します。</p>
+</div>
+<iframe id="cat" style="display:none"></iframe>
+<script>
+  const $ = id => document.getElementById(id);
+  const setStatus = m => { $('status').textContent = m; };
+  let CAT_URL = '';
+
+  function showEmpty(){ $('empty').style.display='flex'; $('cat').style.display='none'; }
+  function showCatalog(url){ CAT_URL = url; $('empty').style.display='none'; $('cat').style.display='block'; reload(); }
+  const reload = () => { if (CAT_URL) $('cat').src = CAT_URL + (CAT_URL.includes('?')?'&':'?') + 'v=' + Date.now(); };
+
+  window.hangar.onStatus(setStatus);
+  window.hangar.onCatalogUrl(showCatalog);
+
+  async function refreshCatalog(){
+    const url = await window.hangar.catalogUrl();
+    if (url) showCatalog(url); else showEmpty();
+  }
+  async function refreshCaps(){
+    let caps = {};
+    try { caps = await window.hangar.capabilities(); } catch {}
+    const ok = !!caps.canRender;
+    $('render').disabled = !ok;
+    $('rname').disabled = !ok;
+    $('render').title = ok
+      ? 'Unity + lilToン/Poiyomi で忠実プレビュー(画像+3D)を生成'
+      : '3D生成には Unity と lilToン が必要です。VCC/ALCOMでlilToンを入れたプロジェクトを「プロジェクト検出」で登録すると有効になります。'
+        + (caps.unity===false ? ' [Unity未検出]' : '') + (caps.liltoon===false ? ' [lilToン未検出]' : '');
+  }
+
+  const doScan = async () => {
+    const f = await window.hangar.pickFolder({}); if (!f.length) return;
+    $('scan').disabled = true; setStatus('スキャン中: ' + f[0]);
+    await window.hangar.scan(f[0]);
+    $('scan').disabled = false; setStatus('スキャン完了'); refreshCaps();
+  };
+  $('scan').onclick = doScan;
+  $('scan2').onclick = doScan;
+  $('detect').onclick = async () => {
+    const f = await window.hangar.pickFolder({ multi: true }); if (!f.length) return;
+    $('detect').disabled = true; setStatus('プロジェクト検出中...');
+    await window.hangar.detect(f);
+    $('detect').disabled = false; setStatus('検出完了'); refreshCaps();
+  };
+  $('rescan').onclick = async () => {
+    $('rescan').disabled = true; setStatus('再スキャン中...');
+    const c = await window.hangar.rescan();
+    $('rescan').disabled = false;
+    const n = (c && c.libraryDirs ? c.libraryDirs.length : 0);
+    setStatus(n ? ('再スキャン完了（ライブラリ' + n + '件）') : 'カタログ再生成完了'); refreshCaps();
+  };
+  $('render').onclick = async () => {
+    const n = $('rname').value.trim(); if (!n) { setStatus('商品名を入力してください'); return; }
+    $('render').disabled = true; setStatus('3D生成中(裏Unity・数分): ' + n);
+    await window.hangar.render(n);
+    $('render').disabled = false; setStatus('3D生成 完了: ' + n); refreshCaps();
+  };
+
+  refreshCatalog();
+  refreshCaps();
+</script></body></html>
