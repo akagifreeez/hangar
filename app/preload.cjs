@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('hangar', {
   catalogUrl: () => ipcRenderer.invoke('catalog-url'),
   capabilities: () => ipcRenderer.invoke('render-capabilities'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  pickFile: () => ipcRenderer.invoke('pick-file'),
+  diff: (pkg, project) => ipcRenderer.invoke('diff', pkg, project),
   onStatus: (cb) => ipcRenderer.on('status', (_e, m) => cb(m)),
   onCatalogUrl: (cb) => ipcRenderer.on('catalog-url', (_e, u) => cb(u)),
 });

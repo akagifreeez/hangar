@@ -15,12 +15,27 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 #empty p{margin:0;font-size:13px;line-height:1.7;max-width:520px}
 #empty .big{background:#4a6cf7;font-size:15px;padding:12px 22px}
 .kbd{background:#2a2a34;border:1px solid #3a3a44;border-radius:4px;padding:1px 6px;font-size:11px;color:#cfcfd6}
+#diffov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:10;padding:34px 18px;overflow:auto}
+#diffcard{background:#1b1b20;border:1px solid #2a2a32;border-radius:12px;max-width:920px;width:100%;display:flex;flex-direction:column}
+#diffhead{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #2a2a32;flex-wrap:wrap}
+#diffhead b{font-size:13px;word-break:break-all;flex:1 1 220px}
+#diffproj{flex:0 1 300px;max-width:300px}
+#diffbody{padding:12px 16px;font-size:13px;line-height:1.6}
+.dv{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700}
+.dv.danger{background:#5a2330;color:#ff9aa8}.dv.review{background:#4a3a23;color:#e7c89a}.dv.clean{background:#234a3a;color:#9ae7c2}
+.dsec{margin-top:14px}.dsec h4{margin:0 0 6px;font-size:13px}
+.dconf{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#cfcfd6;padding:3px 0;border-bottom:1px solid #222228;word-break:break-all}
+.dconf .sub{color:#9a9aa2;display:block;padding-left:14px}
+.dinfo{color:#9aa;font-size:12px;margin:5px 0}
+.duncheck{margin-top:14px;background:#23232b;border:1px solid #2f2f39;border-radius:8px;padding:10px 12px;font-size:12px;color:#cfcfd6}
+.red{color:#ff9aa8}.purple{color:#c3b6ff}.orange{color:#e7c89a}.yellow{color:#e7e0a6}.green{color:#9ae7c2}
 </style></head><body>
 <div id="bar">
   <h1>Hangar</h1>
   <button id="scan">📁 ライブラリをスキャン</button>
   <button id="detect" class="sec">🎯 プロジェクト検出</button>
   <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む">🔄 再スキャン</button>
+  <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック">📦 取り込み前チェック</button>
   <input id="rname" placeholder="3D生成する商品名…" style="width:150px">
   <button id="render" class="sec" title="">🎬 3D生成</button>
   <span class="tag">VRChat非公式・ローカル限定</span>
@@ -34,6 +49,17 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   <p style="color:#6a6a72;font-size:12px">フォルダを選ぶと、中の .unitypackage を再帰的に解析してカタログ化します。</p>
 </div>
 <iframe id="cat" style="display:none"></iframe>
+<div id="diffov">
+  <div id="diffcard">
+    <div id="diffhead">
+      <b id="diffpkg"></b>
+      <select id="diffproj"></select>
+      <button id="diffrun">チェック</button>
+      <button id="diffclose" class="sec">閉じる</button>
+    </div>
+    <div id="diffbody"></div>
+  </div>
+</div>
 <script>
   const $ = id => document.getElementById(id);
   const setStatus = m => { $('status').textContent = m; };
@@ -89,6 +115,75 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
     await window.hangar.render(n);
     $('render').disabled = false; setStatus('3D生成 完了: ' + n); refreshCaps();
   };
+
+  // ---- 取り込み前チェック(diff) ----
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let DIFF_PKG = '';
+
+  $('diffbtn').onclick = async () => {
+    const pkg = await window.hangar.pickFile(); if (!pkg) return;
+    const cfg = await window.hangar.getConfig();
+    const projects = (cfg && cfg.projectDirs) || [];
+    if (!projects.length) { setStatus('先に「🎯 プロジェクト検出」で対象プロジェクトを登録してください'); return; }
+    DIFF_PKG = pkg;
+    $('diffpkg').textContent = pkg.split(/[\\/]/).pop();
+    $('diffproj').innerHTML = projects.map(p => '<option value="'+esc(p)+'">'+esc(p)+'</option>').join('');
+    $('diffov').style.display = 'flex';
+    runDiff();
+  };
+  $('diffclose').onclick = () => { $('diffov').style.display = 'none'; };
+  $('diffrun').onclick = runDiff;
+
+  function consequence(c){
+    if (c.existingPath && c.existingPath.indexOf('Packages/') === 0)
+      return 'VPMで導入済み('+esc(c.existingPath)+')。同梱版はGUID重複扱い→参照ずれ/コンソールエラーの恐れ。同梱フォルダは外すのが安全';
+    if (c.existingPath && c.existingPath !== c.incomingPath)
+      return '別の場所に既存('+esc(c.existingPath)+')＝GUID二重定義の恐れ';
+    return 'あなたの '+esc(c.existingPath||'')+' を上書き(版が違えばダウングレード)';
+  }
+
+  function renderDiff(r){
+    const vt = r.verdict==='danger'?'⚠ 危険 — 取り込み前に確認を':r.verdict==='review'?'△ レビュー推奨':'✓ 衝突なし — 安全に取り込めます';
+    let h = '<div><span class="dv '+r.verdict+'">'+vt+'</span></div>';
+    h += '<div class="dinfo">取り込み '+r.incomingCount+' アセット → 新規 '+r.newCount+' / 上書き '+(r.sharedOverwrite.length+r.guidOverwrite.length)+(r.pathClash.length?(' / パス衝突 '+r.pathClash.length):'')+'</div>';
+    if (r.looksLikeUpdateOf && r.looksLikeUpdateOf.installedHere)
+      h += '<div class="dinfo">ℹ 既知商品「'+esc(r.looksLikeUpdateOf.product)+'」と一致('+r.looksLikeUpdateOf.overlapPct+'%)'+(r.benignReimport?' → 同じ場所への再取込＝想定内':' だが下記の競合あり')+'</div>';
+    if (r.sharedOverwrite.length){
+      h += '<div class="dsec"><h4 class="red">🔴 共有シェーダ/ライブラリの衝突 ('+r.sharedOverwrite.length+')</h4>';
+      h += r.sharedOverwrite.slice(0,15).map(c=>'<div class="dconf">['+esc(c.shared||'')+'] '+esc(c.incomingPath)+'<span class="sub">→ '+consequence(c)+'</span></div>').join('');
+      if (r.sharedOverwrite.length>15) h += '<div class="dinfo">… 他 '+(r.sharedOverwrite.length-15)+' 件</div>';
+      h += '</div>';
+    }
+    if (r.missingShader.length){
+      h += '<div class="dsec"><h4 class="purple">🟣 必要シェーダの欠落 ('+r.missingShader.length+') ＝入れないとピンク</h4>';
+      h += r.missingShader.map(s=>'<div class="dconf">この商品は '+esc(s)+' が必要ですが、対象プロジェクトに見当たりません → 先に '+esc(s)+' を導入</div>').join('');
+      h += '</div>';
+    } else if (r.requires && (r.requires.liltoon || r.requires.poiyomi)){
+      const need=[r.requires.liltoon?'lilToン':'',r.requires.poiyomi?'Poiyomi':''].filter(Boolean).join('+');
+      h += '<div class="dsec"><h4 class="green">🟣 必要シェーダ: OK</h4><div class="dinfo">'+need+' は対象プロジェクトに存在</div></div>';
+    }
+    if (r.guidOverwrite.length){
+      h += '<div class="dsec"><h4 class="orange">🟠 その他の上書き ('+r.guidOverwrite.length+')'+(r.benignReimport?' （更新版＝想定内）':'')+'</h4>';
+      h += r.guidOverwrite.slice(0,10).map(c=>'<div class="dconf">'+esc(c.incomingPath)+'<span class="sub">→ '+esc(c.existingPath||'')+'</span></div>').join('');
+      if (r.guidOverwrite.length>10) h += '<div class="dinfo">… 他 '+(r.guidOverwrite.length-10)+' 件</div>';
+      h += '</div>';
+    }
+    if (r.pathClash.length){
+      h += '<div class="dsec"><h4 class="yellow">🟡 パス衝突(別GUIDが同じ場所へ) ('+r.pathClash.length+') ＝参照切れの恐れ</h4>';
+      h += r.pathClash.slice(0,10).map(c=>'<div class="dconf">'+esc(c.incomingPath)+'</div>').join('');
+      h += '</div>';
+    }
+    if (r.uncheckFolders.length && !r.benignReimport)
+      h += '<div class="duncheck"><b>推奨アンチェック</b>（Unityのインポート窓で外すと安全）:<br>'+r.uncheckFolders.slice(0,8).map(esc).join(' ， ')+'</div>';
+    return h;
+  }
+
+  async function runDiff(){
+    const proj = $('diffproj').value;
+    $('diffbody').innerHTML = '<div class="dinfo">解析中…</div>';
+    const r = await window.hangar.diff(DIFF_PKG, proj);
+    $('diffbody').innerHTML = r ? renderDiff(r) : '<div class="red">解析に失敗しました</div>';
+  }
 
   refreshCatalog();
   refreshCaps();

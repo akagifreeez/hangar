@@ -101,6 +101,25 @@ ipcMain.handle('render', async (_e, name) => { await runCli(['render', name]); a
 ipcMain.handle('catalog-exists', () => fs.existsSync(CATALOG));
 ipcMain.handle('catalog-url', () => fs.existsSync(CATALOG) ? catalogUrl() : '');
 ipcMain.handle('open-external', (_e, url) => { shell.openExternal(url); });
+// 取り込み前チェック: .unitypackage を選ぶ → 対象プロジェクトとの競合を JSON で返す
+ipcMain.handle('pick-file', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    properties: ['openFile'],
+    filters: [{ name: 'Unity Package', extensions: ['unitypackage'] }],
+  });
+  return r.canceled || !r.filePaths.length ? '' : r.filePaths[0];
+});
+ipcMain.handle('diff', async (_e, pkg, project) => {
+  const out = await new Promise((resolve) => {
+    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
+    const child = spawn(process.execPath, [CLI, 'diff', pkg, '--project', project, '--json'], { cwd: ROOT, env });
+    let buf = '';
+    child.stdout.on('data', (d) => buf += d.toString());
+    child.on('close', () => resolve(buf));
+    child.on('error', () => resolve(''));
+  });
+  try { return JSON.parse((out.match(/\{[\s\S]*\}/) || ['null'])[0]); } catch { return null; }
+});
 // 3D生成(方式A)が使えるか= Unity + lilToン が見つかるか
 ipcMain.handle('render-capabilities', async () => {
   const out = await new Promise((resolve) => {
