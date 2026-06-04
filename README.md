@@ -1,6 +1,12 @@
+<img src="build/icon.png" width="84" align="left" hspace="8">
+
 # Hangar — VRChat .unitypackage カタログ & 導入追跡
 
 > **VRChat 非公式ツール** ／ すべて **ローカルのみ・読み取り専用** で動作します。外部送信・自動ログイン・スクレイピング・ファイル改変は一切行いません。
+
+<br clear="left">
+
+![welcome](docs/screenshots/01-welcome.png)
 
 BOOTH などで買い集めた VRChat 向けの `.unitypackage`（アバター・衣装・小物・ギミック）を、**Unity で開かずに** 棚卸し・プレビュー・検索し、**どの購入物がどの Unity プロジェクトに導入済みか** を GUID 突合で逆引きするデスクトップアプリです。
 
