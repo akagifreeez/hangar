@@ -14,7 +14,7 @@ const PROD_DEPS = ['b4a', 'bare-events', 'bare-fs', 'bare-os', 'bare-path', 'bar
   'bare-url', 'events-universal', 'fast-fifo', 'streamx', 'tar-stream', 'teex', 'text-decoder'];
 
 const APP_FILES = ['package.json', 'LICENSE', 'README.md', 'PRIVACY.md', 'THIRD_PARTY_NOTICES.md'];
-const APP_DIRS = ['dist', 'render-template'];                 // app/ は個別に絞ってコピー
+const APP_DIRS = ['render-template'];                          // dist は .js のみ別途コピー、app/ も個別に絞る
 
 function dirSize(p) {
   let n = 0;
@@ -69,6 +69,11 @@ mkdirSync(join(APP, 'app'), { recursive: true });
 for (const f of readdirSync(join(ROOT, 'app'))) {
   if (/^probe/.test(f)) continue;
   if (/\.(cjs|html)$/.test(f)) cpSync(join(ROOT, 'app', f), join(APP, 'app', f));
+}
+// dist は .js / .js.map のみコピー(electron-builder の win-unpacked 等が紛れ込まないように)
+mkdirSync(join(APP, 'dist'), { recursive: true });
+for (const f of readdirSync(join(ROOT, 'dist'))) {
+  if (f.endsWith('.js') || f.endsWith('.js.map')) cpSync(join(ROOT, 'dist', f), join(APP, 'dist', f));
 }
 for (const d of APP_DIRS) cpSync(join(ROOT, d), join(APP, d), { recursive: true });
 for (const f of APP_FILES) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(APP, f));

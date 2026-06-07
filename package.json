@@ -28,6 +28,9 @@
     "productName": "Hangar",
     "copyright": "Copyright (c) 2026 Hangar contributors",
     "asar": false,
+    "directories": {
+      "output": "dist-installer"
+    },
     "files": [
       "app/**/*.cjs",
       "app/**/*.html",
