@@ -6,6 +6,7 @@ import { Catalog, type PackageRow, type Product } from './db.js';
 import { scanDir } from './scan.js';
 import { projectGuids, matchPackages } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
+import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, type CatalogPkg } from './template.js';
 import { renderPackage, findUnity, findLilToon, findPoiyomi } from './render.js';
 
 type Proj = { name: string; path: string; pct: number };
@@ -105,6 +106,42 @@ async function main(): Promise<void> {
         if (json) console.log(JSON.stringify(reports.length === 1 ? reports[0] : reports, null, 2));
         else reports.forEach((r, i) => { if (i) console.log(''); console.log(formatDiffText(r)); });
         if (htmlOut) { writeFileSync(htmlOut, formatDiffHtmlPage(reports), 'utf8'); console.log(`\nレポート(HTML): ${htmlOut}`); }
+        break;
+      }
+      case 'save-template': {
+        // 改変済みアバターのプロジェクトから「自作ファイルだけ」を保存し、依存購入物をマニフェスト化。
+        // 購入物のバイトは一切同梱しない（GUID参照で名指すだけ）。読み取り専用（書き込みは --out のみ）。
+        const json = args.includes('--json');
+        const outIdx = args.indexOf('--out');
+        const outDir = outIdx >= 0 ? args[outIdx + 1] : undefined;
+        if (outIdx >= 0 && (!outDir || outDir.startsWith('--'))) return fail('--out の値（出力先ディレクトリ）がありません');
+        const skip = new Set<number>(); if (outIdx >= 0) skip.add(outIdx + 1);
+        const projectDir = args.find((a, i) => !a.startsWith('--') && !skip.has(i));
+        if (!projectDir) return fail('usage: save-template <projectDir> --out <dir> [--json]');
+        if (!outDir) return fail('--out <dir>（テンプレの出力先）を指定してください');
+        if (!existsSync(projectDir)) return fail('プロジェクトが見つかりません: ' + projectDir);
+        const res = await saveTemplate(projectDir, outDir, buildCatalogPkgs(cat));
+        if (json) console.log(JSON.stringify(res.manifest, null, 2));
+        else console.log(formatSaveText(res));
+        break;
+      }
+      case 'restore-template': {
+        // テンプレを まっさらなプロジェクトへ復元し、購入物の「持ってる/入れ直して/未所持」台帳を出す。
+        // DLしない・ログインしない・.unitypackageを編集しない。書き込みは復元先プロジェクトのみ。
+        const json = args.includes('--json');
+        const force = args.includes('--force');
+        const projFlagIdx = args.indexOf('--project');
+        const projectDir = projFlagIdx >= 0 ? args[projFlagIdx + 1] : undefined;
+        if (projFlagIdx >= 0 && (!projectDir || projectDir.startsWith('--'))) return fail('--project の値（復元先ディレクトリ）がありません');
+        const skip = new Set<number>(); if (projFlagIdx >= 0) skip.add(projFlagIdx + 1);
+        const templateDir = args.find((a, i) => !a.startsWith('--') && !skip.has(i));
+        if (!templateDir) return fail('usage: restore-template <templateDir> --project <freshProjectDir> [--json] [--force]');
+        if (!projectDir) return fail('--project <まっさらなプロジェクト> を指定してください');
+        if (!existsSync(templateDir)) return fail('テンプレが見つかりません: ' + templateDir);
+        if (!existsSync(projectDir)) return fail('復元先プロジェクトが見つかりません: ' + projectDir);
+        const rep = await restoreTemplate(templateDir, projectDir, buildCatalogPkgs(cat), { force });
+        if (json) console.log(JSON.stringify(rep, null, 2));
+        else console.log(formatRestoreText(rep));
         break;
       }
       case 'installs': {
@@ -267,6 +304,8 @@ async function main(): Promise<void> {
         console.log('  scan <libraryDir>                .unitypackage を解析しカタログ登録(+preview抽出)');
         console.log('  list / search <query>            一覧 / 検索');
         console.log('  diff <pkg> --project <dir>       取り込み前チェック: 何を上書き/足りないシェーダ(--json/--all/--html out.html)');
+        console.log('  save-template <projectDir> --out <dir>      改変アバターの自作分を保存＋依存購入物をマニフェスト化(購入バイトは非同梱)');
+        console.log('  restore-template <templateDir> --project <dir>  まっさらなプロジェクトへ復元＋「持ってる/入れ直して」台帳（既定は既存保護・上書きは --force）');
         console.log('  detect [--save] <projectDir...>  導入済みか逆引き（--saveで記録）');
         console.log('  installs                         パッケージ→導入先一覧（重複導入警告）');
         console.log('  catalog [out.html]               カタログ(クリックで詳細: 中身/プレビュー/導入台帳)を生成');
@@ -485,6 +524,15 @@ for (const b of document.querySelectorAll('.filters button')){
 applyFilter();
 showGrid();
 </script></body></html>`;
+}
+
+// テンプレ機能が要る形にカタログ行を整形（id/名前/パス/GUID集合/シェーダ要件）。
+function buildCatalogPkgs(cat: Catalog): CatalogPkg[] {
+  return cat.allPackages().map(r => ({
+    id: r.id, file_name: r.file_name, file_path: r.file_path,
+    guids: JSON.parse(r.guids_json) as string[],
+    requires_liltoon: r.requires_liltoon, requires_poiyomi: r.requires_poiyomi, has_locked: r.has_locked,
+  }));
 }
 
 function fail(msg: string): void {
