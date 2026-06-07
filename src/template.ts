@@ -13,6 +13,10 @@ import { join, relative, dirname, basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { projectGuids, matchPackages } from './detect.js';
 import { classify, type AssetKind } from './classify.js';
+import { extractRefs, buildDerivativeInfo, type AuthoredNode } from './refwalk.js';
+
+// YAML本文に他アセットのGUID参照が住む種別（派生ウォークで本文を読む対象）。
+const YAML_REF_KINDS = new Set<AssetKind>(['material', 'prefab', 'scene', 'anim', 'asset']);
 
 const TOOL_VERSION = '0.1.0';
 const SCHEMA_VERSION = 1 as const;
@@ -69,9 +73,11 @@ export interface TemplateProduct {
   requiresLilToon: boolean;
   requiresPoiyomi: boolean;
   hasLocked: boolean;
+  transitive?: boolean;  // GUID一致(導入)では未検出だが、自作物の参照ウォークで判明した依存(v0.5)
 }
 export interface TemplateTooling { kind: 'vpm'; id: string; version?: string; source: string; }
-export interface AuthoredFile { relPath: string; kind: AssetKind; guid: string; bytes: number; }
+// derivative: content型(mat/texture)が購入データを参照=派生(v0.5)。共有不可だが private 再現はコピー。
+export interface AuthoredFile { relPath: string; kind: AssetKind; guid: string; bytes: number; derivative?: boolean; derivativeOf?: string[]; }
 export interface ExcludedFile { relPath: string; reason: string; }
 // 出所不明の重いバイナリ（未scanの購入物の可能性）= payload に入れず名指しだけ残す
 export interface UncertainFile { relPath: string; kind: AssetKind; guid: string; bytes: number; }
@@ -202,13 +208,12 @@ export async function saveTemplate(projectDir: string, outDir: string, catalog: 
   mkdirSync(payloadRoot, { recursive: true });
 
   const authored: AuthoredFile[] = [];
+  const authoredNodes: AuthoredNode[] = [];   // v0.5 派生ウォーク用（本文の guid 参照）
   const uncertain: UncertainFile[] = [];
   const excluded: ExcludedFile[] = [];
   const folderMetaDone = new Set<string>();
   let copiedBytes = 0;
-  let derivativeSuspect = 0;
   let purchasedSkipped = 0;
-  const derivativeSamples: string[] = [];
 
   const assetsRoot = join(projectDir, 'Assets');
   await walkAssets(assetsRoot, async (abs, metaAbs) => {
@@ -236,11 +241,11 @@ export async function saveTemplate(projectDir: string, outDir: string, catalog: 
     copyAncestorFolderMetas(projectDir, payloadRoot, rel, folderMetaDone); // フォルダGUIDも保存
     copiedBytes += bytes;
     authored.push({ relPath: rel, kind, guid, bytes });
-    // 派生疑い: 購入データを参照/改変している可能性が高い種別（material/texture/mesh/prefab/anim/asset）
-    if (kind === 'material' || kind === 'texture' || ext === '.mesh' || kind === 'prefab' || kind === 'anim' || kind === 'asset') {
-      derivativeSuspect++;
-      if (derivativeSamples.length < 5) derivativeSamples.push(rel);
-    }
+    // v0.5: YAML型は本文の guid 参照を集める（後で推移的に辿り派生/依存を判定）。型(シェーダ/スクリプト)参照は別管理。
+    let refs: string[] = [];
+    let typeGuids: string[] = [];
+    if (YAML_REF_KINDS.has(kind)) { try { const r = extractRefs(await readFile(abs, 'utf8')); refs = r.refs; typeGuids = r.typeGuids; } catch { /* unreadable */ } }
+    authoredNodes.push({ relPath: rel, guid, refs, typeGuids });
   }, (abs, reason) => {
     excluded.push({ relPath: relative(projectDir, abs).replace(/\\/g, '/'), reason });
   });
@@ -270,6 +275,52 @@ export async function saveTemplate(projectDir: string, outDir: string, catalog: 
   }
   const products: TemplateProduct[] = [...byHash.values()].sort((a, b) => b.pct - a.pct);
 
+  // v0.5 派生ウォーク: 自作物の本文 guid 参照を推移的に辿り、購入商品への依存/派生/未解決参照を判定。
+  const guidToProduct = new Map<string, string>();   // guid → 商品名（表示用）
+  const guidToRow = new Map<string, CatalogPkg>();    // guid → 正確なカタログ行（版突合・同名別版対策）
+  for (const c of catalog) for (const g of c.guids) { if (!guidToProduct.has(g)) guidToProduct.set(g, c.file_name); if (!guidToRow.has(g)) guidToRow.set(g, c); }
+  const { perFile, referencedProductGuids } = buildDerivativeInfo(authoredNodes, allProductGuids, guidToProduct);
+  // 派生フラグ: content型(material/asset)が購入物を参照 = 派生(共有不可)。
+  //   - texture は本文に guid 参照を持たない（バイナリ・参照は.meta側）ため検出不能 → ゲートに入れない。
+  //   - prefab/scene が購入物を参照するのは“正常な依存”（構造であり中身でない）。購入baseの prefab variant は
+  //     厳密には派生だが、通常の「購入物を子に持つ prefab」と本文上の区別が難しいため v0.5 では依存として収穫し、
+  //     未解決参照ベースの shareSafe で安全側に倒す（共有時は人間確認を促す）。
+  for (const a of authored) {
+    const info = perFile.get(a.relPath);
+    if (info?.referencesPurchased && (a.kind === 'material' || a.kind === 'asset')) {
+      a.derivative = true;
+      a.derivativeOf = info.products;
+    }
+  }
+  // 推移的依存: 参照ウォークで判明したがGUID一致(導入)では未検出の購入商品を products[] に追加。
+  // file_name でなく解決された guid から正確なカタログ行を引く（同名別版の取り違え=guidSetHash不整合を防ぐ）。
+  const presentNames = new Set(products.map(p => p.fileName));
+  for (const g of referencedProductGuids) {
+    const c = guidToRow.get(g);
+    if (!c || presentNames.has(c.file_name)) continue;
+    products.push({
+      kind: 'booth', fileName: c.file_name, guidSetHash: guidSetHash(c.guids),
+      matched: 0, total: c.guids.length, pct: 0,
+      requiresLilToon: !!c.requires_liltoon, requiresPoiyomi: !!c.requires_poiyomi, hasLocked: !!c.has_locked,
+      transitive: true,
+    });
+    presentNames.add(c.file_name);
+  }
+  const derivatives = authored.filter(a => a.derivative);
+  // 未識別参照(未scan購入物の疑い): マテリアルが、シェーダ(型)以外で購入カタログにも自作にも組み込みにも
+  //   解決できない guid（＝テクスチャ等のコンテンツ参照）を持つ件数。1つでもあれば「共有安全」を主張しない(fail-safe)。
+  //   ※ .asset はXR設定等の“プロジェクト構成”でUnityパッケージGUIDを参照しがち→ノイズが多いので未識別ゲートはmaterial限定。
+  //     .asset が購入カタログを参照する明確な派生は上の derivative ゲート(material||asset)で拾う。
+  let unverifiable = 0;
+  const unverifiableSamples: string[] = [];
+  for (const a of authored) {
+    if (a.kind !== 'material') continue;
+    const info = perFile.get(a.relPath);
+    if (info && info.unresolved > 0) { unverifiable++; if (unverifiableSamples.length < 5) unverifiableSamples.push(a.relPath); }
+  }
+  // 自作アニメが購入物を参照 → 文字列パス束縛の依存は自動検出が限定的なので注意喚起する。
+  const authoredAnimRefsPurchased = authored.some(a => a.kind === 'anim' && perFile.get(a.relPath)?.referencesPurchased);
+
   // ② ツール（VPM）
   const { tooling, manifestPath, parseError } = readVpmTooling(projectDir);
 
@@ -282,13 +333,27 @@ export async function saveTemplate(projectDir: string, outDir: string, catalog: 
     copyFileSync(manifestPath, dstManifest);
   }
 
-  // 警告（v0は派生検出なし＝フラグのみ）
+  // 警告
   const warnings: string[] = [];
   if (!products.length) warnings.push('カタログに一致する購入物が見つかりません（このプロジェクトの購入物が未scanの可能性）。ライブラリ全体を scan してから再実行すると依存を正確に名指しできます。');
   if (uncertain.length) warnings.push(`${uncertain.length} 個の出所不明の重いバイナリ（FBX/音声/大テクスチャ）を payload に入れませんでした（未scanの購入物の可能性＝誤同梱回避）。manifest.uncertain に列挙。ライブラリ全体を scan して再実行すると正しく購入物として名指しできます。`);
-  if (derivativeSuspect) warnings.push(`${derivativeSuspect} 個の自作物（マテリアル/テクスチャ/メッシュ/prefab/アニメ/asset）は購入データを参照・改変している可能性があります（v0は派生を検出しません＝共有・配布の前に必ず確認してください）。例: ${derivativeSamples.join(' , ')}`);
+  if (derivatives.length) {
+    const ex = derivatives.slice(0, 5).map(d => `${d.relPath}→[${(d.derivativeOf ?? []).join(', ')}]`);
+    warnings.push(`${derivatives.length} 個の自作マテリアル/asset が購入データ（テクスチャ等）を参照する派生物です（共有・配布すると派生物の再配布になり得ます＝private再現のみに使用してください）。例: ${ex.join(' / ')}`);
+  }
+  if (unverifiable) {
+    warnings.push(`${unverifiable} 個の自作マテリアル/asset が未識別のアセット（購入カタログにも自作にもツールにも解決できないGUID）を参照しています＝未scanの購入物の可能性。共有前にライブラリ全体を scan して再確認してください。例: ${unverifiableSamples.join(' , ')}`);
+  }
+  if (authoredAnimRefsPurchased) {
+    warnings.push('自作アニメ(.anim/.controller)が購入物を参照しています。アニメは購入メッシュ/階層に文字列パスでも束縛され得るため依存の自動検出は限定的です（対象アバター未所持だと再生対象が解決できません）。');
+  }
   if (parseError) warnings.push('Packages/vpm-manifest.json を解析できませんでした（VPMツール依存を収集できていません）。復元時のツール一覧が不完全な可能性があります。');
-  warnings.push('このテンプレは「私的再現」専用です（共有・自動DL・厳密な版固定は v0 では未対応）。');
+  // shareSafe(fail-safe): 派生・出所不明バイナリ・未識別参照が無く、かつ購入物が実際に検出できている時のみ true。
+  // 「未scanの購入物への参照は検出できない」ため、判定は scan 済みライブラリへの依存であることを文言で必ず開示する。
+  const shareSafe = derivatives.length === 0 && uncertain.length === 0 && unverifiable === 0 && products.length > 0;
+  warnings.push(shareSafe
+    ? 'このテンプレは（scan済みライブラリに基づき）派生物・出所不明物・未識別参照を検出しませんでした＝購入物を持つ相手との共有も比較的安全です。※ライブラリ全体を scan 済みである前提で、未scanの購入物への参照は検出できません。自動DL・厳密な版固定は未対応。'
+    : 'このテンプレは「私的再現」専用です（派生物/出所不明物/未識別参照を含む、または購入物が未検出のため、共有・配布は避けてください）。');
 
   const manifest: TemplateManifest = {
     schemaVersion: SCHEMA_VERSION,
@@ -297,7 +362,7 @@ export async function saveTemplate(projectDir: string, outDir: string, catalog: 
     createdAt: new Date().toISOString(),
     sourceProject: { name: basename(projectDir.replace(/[\\/]+$/, '')) || projectDir, path: projectDir },
     products, tooling, authored, uncertain, excluded, warnings,
-    shareSafe: false, // v0は派生未検出のため共有安全とは保証しない
+    shareSafe,
   };
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
@@ -424,13 +489,22 @@ export function formatSaveText(r: SaveResult): string {
   L.push(`=== テンプレ保存: ${m.sourceProject.name}`);
   L.push(`    出力: ${r.outDir}  (payload/ ＋ manifest.json)`);
   L.push(`    自作ファイル ${m.authored.length} 個コピー (${(r.copiedBytes / 1048576).toFixed(1)}MB) / 除外 ${m.excluded.length} / 購入物スキップ ${r.purchasedSkipped}`);
+  L.push(`    共有安全(shareSafe): ${m.shareSafe ? '✓ はい（派生物・出所不明物なし）' : '✗ いいえ（private再現専用）'}`);
   L.push('');
   L.push(`📦 依存する購入物 (${m.products.length})  ＝バイトは同梱せず名指しのみ（復元時に再インポート）`);
   for (const p of m.products.slice(0, 30)) {
     const need = [p.requiresLilToon ? 'lil' : '', p.requiresPoiyomi ? 'Poi' : '', p.hasLocked ? 'locked' : ''].filter(Boolean).join('/');
-    L.push(`    ・${p.fileName}  (${p.pct}% 一致${need ? ' ・要' + need : ''})`);
+    const tag = p.transitive ? ' 〔参照のみ〕' : ` (${p.pct}% 一致)`;
+    L.push(`    ・${p.fileName} ${tag}${need ? ' ・要' + need : ''}`);
   }
   if (m.products.length > 30) L.push(`    … 他 ${m.products.length - 30} 件`);
+  const derivs = m.authored.filter(a => a.derivative);
+  if (derivs.length) {
+    L.push('');
+    L.push(`⚠ 派生物 (${derivs.length})  ＝購入データを参照する自作マテリアル/asset（共有不可・private再現のみ）`);
+    for (const d of derivs.slice(0, 10)) L.push(`    ・${d.relPath}  → 参照: ${(d.derivativeOf ?? []).join(', ')}`);
+    if (derivs.length > 10) L.push(`    … 他 ${derivs.length - 10} 件`);
+  }
   if (m.uncertain.length) {
     L.push('');
     L.push(`❓ 出所不明の重いバイナリ (${m.uncertain.length})  ＝payload非同梱（未scanの購入物の可能性）`);

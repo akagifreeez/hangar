@@ -259,10 +259,18 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   function renderSave(m, outDir){
     let h = '<div class="dinfo">出力: '+esc(outDir)+'</div>';
     h += '<div class="dinfo">自作ファイル <b>'+((m.authored||[]).length)+'</b> 個を保存 / 除外 '+((m.excluded||[]).length)+'（購入物のバイトは同梱していません）</div>';
+    h += '<div><span class="dv '+(m.shareSafe?'clean':'review')+'">'+(m.shareSafe?'✓ 共有安全（派生物・出所不明物なし）':'⚠ private再現専用（派生物あり＝共有しない）')+'</span></div>';
     h += '<div class="dsec"><h4 class="green">📦 依存する購入物 ('+((m.products||[]).length)+') — 名指しのみ・復元時に再インポート</h4>';
-    h += (m.products||[]).slice(0,40).map(p=>'<div class="dconf">'+esc(p.fileName)+'<span class="sub">'+p.pct+'% 一致'+(p.requiresLilToon?' ・要lilToon':'')+(p.requiresPoiyomi?' ・要Poiyomi':'')+'</span></div>').join('');
+    h += (m.products||[]).slice(0,40).map(p=>'<div class="dconf">'+esc(p.fileName)+'<span class="sub">'+(p.transitive?'参照のみ':(p.pct+'% 一致'))+(p.requiresLilToon?' ・要lilToon':'')+(p.requiresPoiyomi?' ・要Poiyomi':'')+'</span></div>').join('');
     if ((m.products||[]).length>40) h += '<div class="dinfo">… 他 '+((m.products||[]).length-40)+' 件</div>';
     h += '</div>';
+    var derivs = (m.authored||[]).filter(function(a){return a.derivative;});
+    if (derivs.length){
+      h += '<div class="dsec"><h4 class="red">⚠ 派生物 ('+derivs.length+') — 購入データを参照する自作マテリアル/テクスチャ（共有不可）</h4>';
+      h += derivs.slice(0,10).map(function(d){return '<div class="dconf">'+esc(d.relPath)+'<span class="sub">→ 参照: '+esc((d.derivativeOf||[]).join(', '))+'</span></div>';}).join('');
+      if (derivs.length>10) h += '<div class="dinfo">… 他 '+(derivs.length-10)+' 件</div>';
+      h += '</div>';
+    }
     if ((m.uncertain||[]).length){
       h += '<div class="dsec"><h4 class="yellow">❓ 出所不明の重いバイナリ ('+m.uncertain.length+') — payload非同梱（未scanの購入物の可能性）</h4>';
       h += m.uncertain.slice(0,10).map(u=>'<div class="dconf">'+esc(u.relPath)+'</div>').join('')+'</div>';
