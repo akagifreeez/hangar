@@ -21,13 +21,13 @@ export interface ProjectIndex {
   metaCount: number;
 }
 
-// includePackages: Packages/(VPM)配下も索引する。diffで「VPMのlilToン/Poiyomiに、同梱シェーダが衝突」を
+// includePackages: Packages/(VPM)配下も索引する。diffで「VPMのlilToon/Poiyomiに、同梱シェーダが衝突」を
 // 検出するのに必要(BOOTHアバター制作で最頻出の競合)。detect用のprojectGuidsはAssetsのみ(既存挙動維持)。
 export async function projectIndex(projectRoot: string, opts: { includePackages?: boolean } = {}): Promise<ProjectIndex> {
   const guidToPath = new Map<string, string>();
   const pathToGuid = new Map<string, string>();
   let metaCount = 0;
-  // VPM(Packages/)経由のシェーダ。BOOTHアバターはここに入った lilToン/Poiyomi を参照することが多い。
+  // VPM(Packages/)経由のシェーダ。BOOTHアバターはここに入った lilToon/Poiyomi を参照することが多い。
   let hasLilToon = existsSync(join(projectRoot, 'Packages', 'jp.lilxyzw.liltoon'));
   let hasPoiyomi = existsSync(join(projectRoot, 'Packages', 'com.poiyomi.toon'));
 

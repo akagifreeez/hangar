@@ -1,4 +1,4 @@
-// 方式A 自動化: パッケージ → 素プロジェクト＋lilToン → Unityバッチで多角度PNG+GLB → cache/renders/<hash>/ へ配置。
+// 方式A 自動化: パッケージ → 素プロジェクト＋lilToon → Unityバッチで多角度PNG+GLB → cache/renders/<hash>/ へ配置。
 import { createReadStream, createWriteStream, mkdirSync, writeFileSync, rmSync, existsSync, cpSync, readFileSync, readdirSync, copyFileSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,7 +87,7 @@ export function findUnity(): string | null {
   return null;
 }
 
-// ユーザー環境から lilToン/Poiyomi のパッケージ実体を探す。
+// ユーザー環境から lilToon/Poiyomi のパッケージ実体を探す。
 // 配布版はシェーダを同梱しない(再配布回避)ため、ユーザーが持つUnityプロジェクトのPackages/から借用する。
 // 優先: 環境変数 → 検出済みプロジェクト(projectRoots) → アプリ同梱のローカル(_shaders, 開発時のみ)
 function findPackageFolder(pkgId: string, envVar: string, projectRoots: string[]): string | null {
@@ -118,7 +118,7 @@ export async function renderPackage(opts: {
   const { packageFile, hash, cacheDir, renderProjDir, templateDir, lilToonSrc, poiyomiSrc, unityExe } = opts;
   const log = opts.onLog ?? (() => {});
 
-  // プロジェクト骨組み + lilToン(初回のみコピー)
+  // プロジェクト骨組み + lilToon(初回のみコピー)
   mkdirSync(join(renderProjDir, 'Packages'), { recursive: true });
   mkdirSync(join(renderProjDir, 'ProjectSettings'), { recursive: true });
   if (!existsSync(join(renderProjDir, 'ProjectSettings', 'ProjectVersion.txt')))

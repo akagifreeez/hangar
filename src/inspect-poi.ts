@@ -74,7 +74,7 @@ for (const [guid, t] of matText) {
 
 console.log('=== ' + file);
 console.log('総アセット種別:', JSON.stringify(kinds));
-console.log(`マテリアル: ${matText.size}  (Poiyomi:${poiMats} / lilToン:${lilMats} / その他:${otherMats})`);
+console.log(`マテリアル: ${matText.size}  (Poiyomi:${poiMats} / lilToon:${lilMats} / その他:${otherMats})`);
 console.log(`ロック済み(_ShaderOptimizerEnabled:1 or Hidden/Locked参照): ${lockedMats}`);
 console.log(`同梱.shaderファイル: ${shaderFiles.length}`);
 for (const s of shaderFiles.slice(0, 20)) console.log('   ' + s);

@@ -20,7 +20,7 @@ export interface PackageEntry {
 }
 
 export interface ShaderReq {
-  liltoon: boolean;         // lilToン マテリアルを含む
+  liltoon: boolean;         // lilToon マテリアルを含む
   poiyomi: boolean;         // Poiyomi マテリアルを含む
   locked: boolean;          // Poiyomi ロック済み(_ShaderOptimizerEnabled:1)
 }

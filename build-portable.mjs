@@ -1,7 +1,7 @@
 // 配布用ポータブルビルドの組み立て(electron-builder無しでも動く実体を作る)。
 // 構成: <out>/Hangar.exe(=electron.exe) + Electronランタイム + resources/app/(コンパイル済みアプリ + 本番依存)
 // 使い方: node build-portable.mjs   → release/Hangar-win-x64/ を生成
-import { existsSync, rmSync, mkdirSync, cpSync, renameSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, cpSync, renameSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +27,28 @@ function dirSize(p) {
 
 if (!existsSync(ELECTRON_DIST)) { console.error('Electron dist が無い。npm install してください: ' + ELECTRON_DIST); process.exit(1); }
 if (!existsSync(join(ROOT, 'dist', 'cli.js'))) { console.error('dist/cli.js が無い。先に npm run build を実行してください'); process.exit(1); }
+
+// dist 完全性チェック: cli.js 等がimportする相対モジュールが全て dist/ に在るか。
+// （以前 diff.js/template.js が欠けた版を配布してしまった事故を再発させない配布前ゲート）
+function verifyDistComplete(distDir) {
+  const jsFiles = readdirSync(distDir).filter(f => f.endsWith('.js'));
+  const present = new Set(jsFiles);
+  const missing = [];
+  for (const f of jsFiles) {
+    const src = readFileSync(join(distDir, f), 'utf8');
+    const re = /(?:from|import)\s+['"]\.\/([\w.\-/]+\.js)['"]/g;
+    let m;
+    while ((m = re.exec(src))) { if (!present.has(m[1])) missing.push(`${f} → ./${m[1]}`); }
+  }
+  if (missing.length) {
+    console.error('✗ dist 不完全: 次の相対import先が dist/ に存在しません（npm run build が古い/失敗の可能性）:');
+    for (const x of missing) console.error('   ' + x);
+    console.error('  → `npm run build` を実行してから再試行してください。配布を中断します。');
+    process.exit(1);
+  }
+  console.log(`dist 完全性チェック OK (${jsFiles.length} モジュール)`);
+}
+verifyDistComplete(join(ROOT, 'dist'));
 
 console.log('clean ' + OUT);
 rmSync(OUT, { recursive: true, force: true });

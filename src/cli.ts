@@ -2,6 +2,7 @@
 import { basename, join, dirname, relative } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { Catalog, type PackageRow, type Product } from './db.js';
 import { scanDir } from './scan.js';
 import { projectGuids, matchPackages } from './detect.js';
@@ -13,6 +14,11 @@ type Proj = { name: string; path: string; pct: number };
 
 const mb = (b: number) => `${(b / 1048576).toFixed(1)}MB`;
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function appVersion(): string {
+  try { return JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version ?? '?'; }
+  catch { return '?'; }
+}
 
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
@@ -77,6 +83,8 @@ async function main(): Promise<void> {
         const explicitProj = projFlagIdx >= 0 ? args[projFlagIdx + 1] : undefined;
         const htmlIdx = args.indexOf('--html');
         const htmlOut = htmlIdx >= 0 ? args[htmlIdx + 1] : undefined;
+        if (projFlagIdx >= 0 && (!explicitProj || explicitProj.startsWith('--'))) return fail('--project の値（プロジェクトディレクトリ）がありません');
+        if (htmlIdx >= 0 && (!htmlOut || htmlOut.startsWith('--'))) return fail('--html の値（出力HTMLパス）がありません');
         // 値を取るフラグ(--project/--html)の「次の引数」は位置引数(=パッケージ)から除外
         const skip = new Set<number>();
         for (const fi of [projFlagIdx, htmlIdx]) if (fi >= 0) skip.add(fi + 1);
@@ -191,8 +199,11 @@ async function main(): Promise<void> {
       }
       case 'reclaim': {
         // 重複コピーを「1個残して quarantine へ移動」する“可逆”プランを生成。削除はしない。
-        const scriptOut = args.find(a => a.toLowerCase().endsWith('.ps1')) ?? 'd:\\working\\hangar\\reclaim_plan.ps1';
-        const quarantine = 'D:\\_hangar_quarantine';
+        // 出力先/隔離先は実行マシン依存にせず CWD 相対を既定に（--quarantine <dir> で上書き可）。
+        const scriptOut = args.find(a => a.toLowerCase().endsWith('.ps1')) ?? join(process.cwd(), 'reclaim_plan.ps1');
+        const qFlagIdx = args.indexOf('--quarantine');
+        const quarantine = (qFlagIdx >= 0 && args[qFlagIdx + 1] && !args[qFlagIdx + 1]!.startsWith('--'))
+          ? args[qFlagIdx + 1]! : join(process.cwd(), '_hangar_quarantine');
         const products = cat.dedupedProducts().filter(p => p.copyCount > 1);
         const score = (pth: string) => (/\\trash\\/i.test(pth) ? 1000 : 0) + (/\\test\\/i.test(pth) ? 500 : 0) + pth.length;
         const q = (s: string) => "'" + s.replace(/'/g, "''") + "'";
@@ -200,7 +211,7 @@ async function main(): Promise<void> {
         const plan: string[] = [];
         let delCount = 0, freed = 0;
         L.push('# Hangar reclaim plan (REVERSIBLE): 重複コピーを quarantine へ「移動」します（削除ではない＝元に戻せます）。');
-        L.push('# 各商品を1個だけ残し、残りを D:\\_hangar_quarantine へ移動。実際に空けるには確認後 quarantine を削除。');
+        L.push(`# 各商品を1個だけ残し、残りを ${quarantine} へ移動。実際に空けるには確認後 quarantine を削除。`);
         L.push('$ErrorActionPreference = "Stop"');
         L.push('$Quarantine = ' + q(quarantine));
         for (const p of products) {
@@ -259,13 +270,13 @@ async function main(): Promise<void> {
         const unity = findUnity();
         if (!unity) return fail('Unity(2022.3系)が見つかりません');
         const lil = findLilToon(projectRoots);
-        if (!lil) return fail('lilToン が見つかりません。VCC/ALCOMでlilToンを入れたプロジェクトを「プロジェクト検出」で登録するか、環境変数 HANGAR_LILTOON にパッケージのパスを指定してください');
+        if (!lil) return fail('lilToon が見つかりません。VCC/ALCOMでlilToonを入れたプロジェクトを「プロジェクト検出」で登録するか、環境変数 HANGAR_LILTOON にパッケージのパスを指定してください');
         const poi = findPoiyomi(projectRoots);
         if (!poi) console.log('  ⚠ Poiyomi未検出 → Poiyomi系アバターはピンクになります(hangar/_shaders/com.poiyomi.toon を用意)');
         const hash = r.preview_dir ? basename(r.preview_dir) : createHash('md5').update(r.file_path).digest('hex').slice(0, 16);
         const hangarRoot = dirname(cacheDir);
         console.log(`render: ${r.file_name}`);
-        console.log(`  Unity: ${unity}  / lilToン:有 Poiyomi:${poi ? '有' : '無'}`);
+        console.log(`  Unity: ${unity}  / lilToon:有 Poiyomi:${poi ? '有' : '無'}`);
         console.log('  ※ 裏でUnityバッチレンダ。数分かかります...');
         const res = await renderPackage({
           packageFile: r.file_path, hash, cacheDir,
@@ -295,9 +306,13 @@ async function main(): Promise<void> {
         }));
         break;
       }
-      default:
-        console.log('Hangar v0.1 — commands:');
-        console.log('  render <package名の一部>          裏Unity+lilToンで忠実プレビュー画像+3D GLBを生成');
+      case 'version': case '--version': case '-v':
+        console.log('hangar ' + appVersion());
+        break;
+      default: {
+        if (cmd) { console.error(`不明なコマンド: ${cmd}`); console.error(''); }
+        console.log(`Hangar v${appVersion()} — commands:`);
+        console.log('  render <package名の一部>          裏Unity+lilToonで忠実プレビュー画像+3D GLBを生成');
         console.log('  dupes                            同一内容パッケージの重複コピーを検出(容量無駄)');
         console.log('  products                         重複を束ねたユニーク商品一覧(無駄容量つき)');
         console.log('  reclaim [out.ps1]                重複コピー削減プラン(可逆=quarantine移動)を書出し ※削除はしない');
@@ -309,6 +324,10 @@ async function main(): Promise<void> {
         console.log('  detect [--save] <projectDir...>  導入済みか逆引き（--saveで記録）');
         console.log('  installs                         パッケージ→導入先一覧（重複導入警告）');
         console.log('  catalog [out.html]               カタログ(クリックで詳細: 中身/プレビュー/導入台帳)を生成');
+        console.log('  version                          バージョンを表示');
+        if (cmd) process.exitCode = 1;   // 不明コマンドは失敗扱い(typoが即発覚)
+        break;
+      }
     }
   } finally {
     cat.close();
@@ -369,7 +388,7 @@ function buildTreeHtml(files: { pathname: string; kind: string }[]): string {
 function shaderBadges(r: PackageRow): string {
   const b: string[] = [];
   if (r.requires_poiyomi) b.push('<span class="sh poi">要Poiyomi</span>');
-  if (r.requires_liltoon) b.push('<span class="sh lil">要lilToン</span>');
+  if (r.requires_liltoon) b.push('<span class="sh lil">要lilToon</span>');
   if (r.has_locked) b.push('<span class="sh lock">ロック済</span>');
   return b.length ? `<div class="shbadges">${b.join('')}</div>` : '';
 }
@@ -390,7 +409,7 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
   const hero = gallery[0] ?? '';
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}</span>` : '';
   const faithful = render.heroUri
-    ? `<h3>忠実プレビュー（方式A：本物のlilToンでUnity焼き）</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` +
+    ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` +
       (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">▶ 3Dで回す（GLB・Unity不要）</a>` : '') + `</div>`
     : '';
   const inst = p.projects.length
@@ -486,7 +505,7 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
     <button data-f="notinstalled">未導入</button>
     <button data-f="dup">重複あり</button>
     <button data-f="poiyomi">要Poiyomi</button>
-    <button data-f="liltoon">要lilToン</button>
+    <button data-f="liltoon">要lilToon</button>
   </div>
   <span id="count"></span>
 </div></header>

@@ -37,24 +37,49 @@ let win;
 function send(channel, msg) { if (win && !win.isDestroyed()) win.webContents.send(channel, msg); }
 function catalogUrl() { return 'file:///' + CATALOG.replace(/\\/g, '/'); }
 
-// Electron 自身を node モードで起動してコンパイル済みCLIを実行(system Node 不要)
-function runCli(args) {
+// Electron 自身を node モードで起動してコンパイル済みCLIを実行(system Node 不要)。
+// 戻り値 {code, tail}: 終了コード(0=成功)と末尾ログ行(失敗時の原因表示用)。onLine で全行を観測可。
+function runCli(args, onLine) {
   return new Promise((resolve) => {
     const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
     let buf = '';
+    const tail = [];
     const onData = (d) => {
       buf += d.toString();
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
-        if (line.trim() && !/ExperimentalWarning|trace-warnings/.test(line)) send('status', line.trim());
+        const t = line.trim();
+        if (t && !/ExperimentalWarning|trace-warnings/.test(t)) {
+          send('status', t);
+          if (onLine) onLine(t);
+          tail.push(t); if (tail.length > 10) tail.shift();
+        }
       }
     };
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
-    child.on('close', (code) => resolve(code));
-    child.on('error', (e) => { send('status', 'CLI起動失敗: ' + e.message); resolve(-1); });
+    child.on('close', (code) => { const t = buf.trim(); if (t) tail.push(t); resolve({ code: code == null ? 0 : code, tail }); });
+    child.on('error', (e) => { send('status', 'CLI起動失敗: ' + e.message); resolve({ code: -1, tail: ['CLI起動失敗: ' + e.message] }); });
+  });
+}
+
+// CLIをJSONモードで実行し最初のJSON値を返す(diff/template/caps 用)。{ok, code, report, tail}。
+function runCliJson(args) {
+  return new Promise((resolve) => {
+    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    let out = '';
+    const err = [];
+    child.stdout.on('data', (d) => out += d.toString());
+    child.stderr.on('data', (d) => { const t = d.toString().trim(); if (t && !/ExperimentalWarning|trace-warnings/.test(t)) err.push(t); });
+    child.on('close', (code) => {
+      let report = null;
+      try { report = JSON.parse((out.match(/[[{][\s\S]*[}\]]/) || ['null'])[0]); } catch { report = null; }
+      resolve({ ok: code === 0 && report != null, code: code == null ? 0 : code, report, tail: err.slice(-6) });
+    });
+    child.on('error', (e) => resolve({ ok: false, code: -1, report: null, tail: ['CLI起動失敗: ' + e.message] }));
   });
 }
 
@@ -82,22 +107,43 @@ function createWindow() {
 ipcMain.handle('pick-folder', async (_e, opts) => {
   const props = ['openDirectory'];
   if (opts && opts.multi) props.push('multiSelections');
-  const r = await dialog.showOpenDialog(win, { properties: props });
+  const r = await dialog.showOpenDialog(win, { properties: props, title: (opts && opts.title) || undefined });
   return r.canceled ? [] : r.filePaths;
 });
-ipcMain.handle('scan', async (_e, folder) => { remember('libraryDirs', [folder]); await runCli(['scan', folder]); await regen(); return true; });
-ipcMain.handle('detect', async (_e, folders) => { remember('projectDirs', folders); await runCli(['detect', '--save', ...folders]); await regen(); return true; });
+// スキャン: 登録件数/解析失敗件数を返し、0件は呼び出し側で「無言成功」にしない。0件ならカタログに切り替えない。
+ipcMain.handle('scan', async (_e, folder) => {
+  remember('libraryDirs', [folder]);
+  let count = null, failed = 0;
+  const { code, tail } = await runCli(['scan', folder], (l) => {
+    const m = l.match(/scanned (\d+) package/); if (m) count = +m[1];
+    if (/parse失敗/.test(l)) failed++;
+  });
+  if (code === 0 && (count == null || count > 0)) await regen();
+  return { ok: code === 0, code, count: count == null ? 0 : count, failed, tail };
+});
+// 検出: .meta総数と導入済み商品数を集計して返す(metaTotal=0 は「Assets違い」を疑える)。
+ipcMain.handle('detect', async (_e, folders) => {
+  remember('projectDirs', folders);
+  let metaTotal = 0, installed = 0;
+  const { code, tail } = await runCli(['detect', '--save', ...folders], (l) => {
+    const m = l.match(/\.meta:(\d+)/); if (m) metaTotal += +m[1];
+    if (/INSTALLED/.test(l)) installed++;
+  });
+  await regen();
+  return { ok: code === 0, code, metaTotal, installed, tail };
+});
 ipcMain.handle('regen', async () => { await regen(); return true; });
 ipcMain.handle('get-config', () => loadConfig());
 // 記憶済みライブラリ/プロジェクトを全部やり直して差分を取り込む
 ipcMain.handle('rescan', async () => {
   const c = loadConfig();
-  for (const d of c.libraryDirs || []) { send('status', '再スキャン: ' + d); await runCli(['scan', d]); }
-  if ((c.projectDirs || []).length) { send('status', 'プロジェクト再検出...'); await runCli(['detect', '--save', ...c.projectDirs]); }
+  let ok = true;
+  for (const d of c.libraryDirs || []) { send('status', '再スキャン: ' + d); const r = await runCli(['scan', d]); if (r.code !== 0) ok = false; }
+  if ((c.projectDirs || []).length) { send('status', 'プロジェクト再検出...'); const r = await runCli(['detect', '--save', ...c.projectDirs]); if (r.code !== 0) ok = false; }
   await regen();
-  return c;
+  return { ok, libraryDirs: c.libraryDirs || [], projectDirs: c.projectDirs || [] };
 });
-ipcMain.handle('render', async (_e, name) => { await runCli(['render', name]); await regen(); return true; });
+ipcMain.handle('render', async (_e, name) => { const { code, tail } = await runCli(['render', name]); await regen(); return { ok: code === 0, code, tail }; });
 ipcMain.handle('catalog-exists', () => fs.existsSync(CATALOG));
 ipcMain.handle('catalog-url', () => fs.existsSync(CATALOG) ? catalogUrl() : '');
 ipcMain.handle('open-external', (_e, url) => { shell.openExternal(url); });
@@ -110,27 +156,22 @@ ipcMain.handle('pick-file', async () => {
   return r.canceled || !r.filePaths.length ? '' : r.filePaths[0];
 });
 ipcMain.handle('diff', async (_e, pkg, project) => {
-  const out = await new Promise((resolve) => {
-    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
-    const child = spawn(process.execPath, [CLI, 'diff', pkg, '--project', project, '--json'], { cwd: ROOT, env });
-    let buf = '';
-    child.stdout.on('data', (d) => buf += d.toString());
-    child.on('close', () => resolve(buf));
-    child.on('error', () => resolve(''));
-  });
-  try { return JSON.parse((out.match(/\{[\s\S]*\}/) || ['null'])[0]); } catch { return null; }
+  const r = await runCliJson(['diff', pkg, '--project', project, '--json']);
+  return r.report;   // 失敗時 null（UI 側で原因表示）
 });
-// 3D生成(方式A)が使えるか= Unity + lilToン が見つかるか
+// 再現テンプレ: 保存（自作分→テンプレ）/ 復元（テンプレ→まっさらなプロジェクト）。{ok, report, tail} を返す。
+ipcMain.handle('save-template', async (_e, projectDir, outDir) => {
+  return await runCliJson(['save-template', projectDir, '--out', outDir, '--json']);
+});
+ipcMain.handle('restore-template', async (_e, templateDir, projectDir, force) => {
+  const args = ['restore-template', templateDir, '--project', projectDir, '--json'];
+  if (force) args.push('--force');
+  return await runCliJson(args);
+});
+// 3D生成(方式A)が使えるか= Unity + lilToon が見つかるか
 ipcMain.handle('render-capabilities', async () => {
-  const out = await new Promise((resolve) => {
-    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
-    const child = spawn(process.execPath, [CLI, 'caps'], { cwd: ROOT, env });
-    let buf = '';
-    child.stdout.on('data', (d) => buf += d.toString());
-    child.on('close', () => resolve(buf));
-    child.on('error', () => resolve(''));
-  });
-  try { return JSON.parse((out.match(/\{[\s\S]*\}/) || ['{}'])[0]); } catch { return {}; }
+  const r = await runCliJson(['caps']);
+  return r.report || {};
 });
 
 app.whenReady().then(() => {

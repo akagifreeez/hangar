@@ -1,6 +1,6 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-serif;display:flex;flex-direction:column;overflow:hidden}
-#bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #2a2a32;background:#1b1b20;flex:0 0 auto}
+#bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #2a2a32;background:#1b1b20;flex:0 0 auto;flex-wrap:wrap}
 #bar h1{font-size:14px;margin:0 10px 0 2px;font-weight:600}
 button{background:#4a6cf7;color:#fff;border:0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer}
 button.sec{background:#2a2a34;color:#ddd}
@@ -8,19 +8,27 @@ button:hover:not(:disabled){filter:brightness(1.12)}
 button:disabled{opacity:.4;cursor:not-allowed}
 input{background:#2a2a34;border:1px solid #3a3a44;color:#ddd;border-radius:6px;padding:6px 8px;font-size:12px}
 #status{margin-left:auto;color:#9a9aa2;font-size:12px;max-width:46%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid #ffffff66;border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;margin-right:5px}
+@keyframes sp{to{transform:rotate(360deg)}}
+body.busy{cursor:progress}
 .tag{color:#6a6a72;font-size:11px;border:1px solid #2a2a32;border-radius:99px;padding:2px 8px;white-space:nowrap}
 iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 #empty{flex:1 1 auto;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#9a9aa2;text-align:center;padding:40px}
 #empty h2{color:#e8e8ea;font-size:20px;margin:0}
-#empty p{margin:0;font-size:13px;line-height:1.7;max-width:520px}
+#empty p{margin:0;font-size:13px;line-height:1.7;max-width:560px}
 #empty .big{background:#4a6cf7;font-size:15px;padding:12px 22px}
+#empty .steps{display:flex;gap:10px;color:#8a8a92;font-size:12px;flex-wrap:wrap;justify-content:center}
+#empty .steps span{background:#1e1e24;border:1px solid #2a2a32;border-radius:8px;padding:6px 12px}
+#emptymsg{display:none;background:#5a2330;color:#ffd7dd;border:1px solid #7a3340;border-radius:8px;padding:10px 14px;font-size:13px;max-width:560px}
 .kbd{background:#2a2a34;border:1px solid #3a3a44;border-radius:4px;padding:1px 6px;font-size:11px;color:#cfcfd6}
-#diffov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:10;padding:34px 18px;overflow:auto}
-#diffcard{background:#1b1b20;border:1px solid #2a2a32;border-radius:12px;max-width:920px;width:100%;display:flex;flex-direction:column}
-#diffhead{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #2a2a32;flex-wrap:wrap}
-#diffhead b{font-size:13px;word-break:break-all;flex:1 1 220px}
+#err{position:fixed;left:0;right:0;bottom:0;background:#5a2330;color:#ffd7dd;padding:10px 16px;font-size:12px;display:none;z-index:20;border-top:1px solid #7a3340;line-height:1.5}
+#err b{color:#ff9aa8}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:10;padding:34px 18px;overflow:auto}
+.ovcard{background:#1b1b20;border:1px solid #2a2a32;border-radius:12px;max-width:920px;width:100%;display:flex;flex-direction:column}
+.ovhead{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #2a2a32;flex-wrap:wrap}
+.ovhead b{font-size:13px;word-break:break-all;flex:1 1 220px}
 #diffproj{flex:0 1 300px;max-width:300px}
-#diffbody{padding:12px 16px;font-size:13px;line-height:1.6}
+.ovbody{padding:12px 16px;font-size:13px;line-height:1.6}
 .dv{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700}
 .dv.danger{background:#5a2330;color:#ff9aa8}.dv.review{background:#4a3a23;color:#e7c89a}.dv.clean{background:#234a3a;color:#9ae7c2}
 .dsec{margin-top:14px}.dsec h4{margin:0 0 6px;font-size:13px}
@@ -36,7 +44,9 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   <button id="detect" class="sec">🎯 プロジェクト検出</button>
   <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む">🔄 再スキャン</button>
   <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック">📦 取り込み前チェック</button>
-  <input id="rname" placeholder="3D生成する商品名…" style="width:150px">
+  <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
+  <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
+  <input id="rname" placeholder="3D生成する商品名…" style="width:140px">
   <button id="render" class="sec" title="">🎬 3D生成</button>
   <span class="tag">VRChat非公式・ローカル限定</span>
   <span id="status">準備完了</span>
@@ -45,31 +55,68 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   <h2>ようこそ Hangar へ</h2>
   <p>VRChatの <span class="kbd">.unitypackage</span> を <b>展開せず</b>に棚卸し・プレビュー・導入追跡するツールです。<br>
   すべて<b>ローカルのみ・読み取り専用</b>で動作し、外部送信・スクレイピング・改変は一切しません。</p>
+  <div class="steps"><span>① 保存フォルダを選ぶ</span><span>② サムネ一覧で棚卸し</span><span>③ プロジェクト検出で導入逆引き</span></div>
+  <p id="emptymsg"></p>
   <button id="scan2" class="big">📁 まずライブラリ(BOOTH等の保存先)をスキャン</button>
-  <p style="color:#6a6a72;font-size:12px">フォルダを選ぶと、中の .unitypackage を再帰的に解析してカタログ化します。</p>
+  <p style="color:#6a6a72;font-size:12px">例: <b>…\Downloads</b> や BOOTH 保存先フォルダを選ぶと、中の .unitypackage を再帰的に解析します（数分かかることがあります）。</p>
 </div>
 <iframe id="cat" style="display:none"></iframe>
-<div id="diffov">
-  <div id="diffcard">
-    <div id="diffhead">
+
+<!-- 取り込み前チェック(diff) -->
+<div id="diffov" class="ov">
+  <div class="ovcard">
+    <div class="ovhead">
       <b id="diffpkg"></b>
       <select id="diffproj"></select>
       <button id="diffrun">チェック</button>
       <button id="diffclose" class="sec">閉じる</button>
     </div>
-    <div id="diffbody"></div>
+    <div id="diffbody" class="ovbody"></div>
   </div>
 </div>
+
+<!-- 再現テンプレ 結果 -->
+<div id="tmplov" class="ov">
+  <div class="ovcard">
+    <div class="ovhead">
+      <b id="tmpltitle"></b>
+      <button id="tmplclose" class="sec">閉じる</button>
+    </div>
+    <div id="tmplbody" class="ovbody"></div>
+  </div>
+</div>
+
+<div id="err"></div>
+
 <script>
   const $ = id => document.getElementById(id);
-  const setStatus = m => { $('status').textContent = m; };
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const setStatus = m => { $('status').innerHTML = m; };
   let CAT_URL = '';
+  let BUSY = false;
+  let LAST_RESTORE = null;
 
-  function showEmpty(){ $('empty').style.display='flex'; $('cat').style.display='none'; }
+  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl','render'];
+  function setBusy(on, label){
+    BUSY = on;
+    document.body.classList.toggle('busy', on);
+    for (const id of ACTION_BTNS){ const b = $(id); if (b) b.disabled = on; }
+    if (on && label) setStatus('<span class="spin"></span>' + esc(label));
+    if (!on) refreshCaps();   // caps に応じて render ボタンの活性を戻す
+  }
+  function showError(title, tail){
+    const sub = (tail && tail.length) ? ' — <span style="color:#e6b6bd">' + esc(tail.join(' / ').slice(0,400)) + '</span>' : '';
+    $('err').innerHTML = '<b>' + esc(title) + '</b>' + sub + ' <button class="sec" style="float:right;padding:2px 10px" onclick="document.getElementById(\'err\').style.display=\'none\'">閉じる</button>';
+    $('err').style.display = 'block';
+  }
+  const clearError = () => { $('err').style.display = 'none'; };
+
+  function showEmpty(){ $('emptymsg').style.display='none'; $('empty').style.display='flex'; $('cat').style.display='none'; }
+  function showEmptyMsg(msg){ $('emptymsg').textContent = msg; $('emptymsg').style.display='block'; $('empty').style.display='flex'; $('cat').style.display='none'; }
   function showCatalog(url){ CAT_URL = url; $('empty').style.display='none'; $('cat').style.display='block'; reload(); }
   const reload = () => { if (CAT_URL) $('cat').src = CAT_URL + (CAT_URL.includes('?')?'&':'?') + 'v=' + Date.now(); };
 
-  window.hangar.onStatus(setStatus);
+  window.hangar.onStatus(m => { if (!BUSY) setStatus(esc(m)); else setStatus('<span class="spin"></span>' + esc(m)); });
   window.hangar.onCatalogUrl(showCatalog);
 
   async function refreshCatalog(){
@@ -80,51 +127,67 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
     let caps = {};
     try { caps = await window.hangar.capabilities(); } catch {}
     const ok = !!caps.canRender;
-    $('render').disabled = !ok;
-    $('rname').disabled = !ok;
+    if (!BUSY){ $('render').disabled = !ok; $('rname').disabled = !ok; }
     $('render').title = ok
-      ? 'Unity + lilToン/Poiyomi で忠実プレビュー(画像+3D)を生成'
-      : '3D生成には Unity と lilToン が必要です。VCC/ALCOMでlilToンを入れたプロジェクトを「プロジェクト検出」で登録すると有効になります。'
-        + (caps.unity===false ? ' [Unity未検出]' : '') + (caps.liltoon===false ? ' [lilToン未検出]' : '');
+      ? 'Unity + lilToon/Poiyomi で忠実プレビュー(画像+3D)を生成'
+      : '3D生成には Unity と lilToon が必要です。VCC/ALCOMでlilToonを入れたプロジェクトを「プロジェクト検出」で登録すると有効になります。'
+        + (caps.unity===false ? ' [Unity未検出]' : '') + (caps.liltoon===false ? ' [lilToon未検出]' : '');
   }
 
   const doScan = async () => {
-    const f = await window.hangar.pickFolder({}); if (!f.length) return;
-    $('scan').disabled = true; setStatus('スキャン中: ' + f[0]);
-    await window.hangar.scan(f[0]);
-    $('scan').disabled = false; setStatus('スキャン完了'); refreshCaps();
+    if (BUSY) return;
+    const f = await window.hangar.pickFolder({ title: 'BOOTH等の保存先フォルダを選択' }); if (!f.length) return;
+    setBusy(true, 'スキャン中: ' + f[0]); clearError();
+    try {
+      const r = await window.hangar.scan(f[0]);
+      if (!r.ok) { showError('スキャンに失敗しました', r.tail); setStatus('スキャン失敗'); }
+      else if (r.count === 0) { showEmptyMsg('このフォルダに .unitypackage が見つかりませんでした。BOOTH のダウンロード先フォルダ（例: …\\Downloads）を選び直してください。'); setStatus('0件'); }
+      else setStatus('スキャン完了: ' + r.count + ' 件' + (r.failed ? ('（解析失敗 ' + r.failed + '）') : ''));
+    } finally { setBusy(false); }
   };
   $('scan').onclick = doScan;
   $('scan2').onclick = doScan;
+
   $('detect').onclick = async () => {
-    const f = await window.hangar.pickFolder({ multi: true }); if (!f.length) return;
-    $('detect').disabled = true; setStatus('プロジェクト検出中...');
-    await window.hangar.detect(f);
-    $('detect').disabled = false; setStatus('検出完了'); refreshCaps();
+    if (BUSY) return;
+    const f = await window.hangar.pickFolder({ multi: true, title: 'Unityプロジェクトのフォルダ(Assetsを含む)を選択' }); if (!f.length) return;
+    setBusy(true, 'プロジェクト検出中…'); clearError();
+    try {
+      const r = await window.hangar.detect(f);
+      if (!r.ok) showError('プロジェクト検出に失敗しました', r.tail);
+      else if (r.metaTotal === 0) { showError('.meta が見つかりませんでした', ['Unityプロジェクトのルート（Assets を含むフォルダ）を選んでください']); setStatus('検出: .meta 0件'); }
+      else setStatus('検出完了: 導入済み ' + r.installed + ' 商品');
+    } finally { setBusy(false); }
   };
   $('rescan').onclick = async () => {
-    $('rescan').disabled = true; setStatus('再スキャン中...');
-    const c = await window.hangar.rescan();
-    $('rescan').disabled = false;
-    const n = (c && c.libraryDirs ? c.libraryDirs.length : 0);
-    setStatus(n ? ('再スキャン完了（ライブラリ' + n + '件）') : 'カタログ再生成完了'); refreshCaps();
+    if (BUSY) return;
+    setBusy(true, '再スキャン中…'); clearError();
+    try {
+      const c = await window.hangar.rescan();
+      if (c && !c.ok) showError('再スキャンで一部失敗しました');
+      const n = (c && c.libraryDirs ? c.libraryDirs.length : 0);
+      setStatus(n ? ('再スキャン完了（ライブラリ' + n + '件）') : 'カタログ再生成完了');
+    } finally { setBusy(false); }
   };
   $('render').onclick = async () => {
+    if (BUSY) return;
     const n = $('rname').value.trim(); if (!n) { setStatus('商品名を入力してください'); return; }
-    $('render').disabled = true; setStatus('3D生成中(裏Unity・数分): ' + n);
-    await window.hangar.render(n);
-    $('render').disabled = false; setStatus('3D生成 完了: ' + n); refreshCaps();
+    setBusy(true, '3D生成中(裏Unity・数分): ' + n); clearError();
+    try {
+      const r = await window.hangar.render(n);
+      if (r && r.ok) setStatus('3D生成 完了: ' + n);
+      else { showError('3D生成に失敗しました: ' + n, r && r.tail); setStatus('3D生成 失敗'); }
+    } finally { setBusy(false); }
   };
 
   // ---- 取り込み前チェック(diff) ----
-  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   let DIFF_PKG = '';
-
   $('diffbtn').onclick = async () => {
-    const pkg = await window.hangar.pickFile(); if (!pkg) return;
+    if (BUSY) return;
     const cfg = await window.hangar.getConfig();
     const projects = (cfg && cfg.projectDirs) || [];
-    if (!projects.length) { setStatus('先に「🎯 プロジェクト検出」で対象プロジェクトを登録してください'); return; }
+    if (!projects.length) { showError('対象プロジェクトが未登録です', ['先に「🎯 プロジェクト検出」で Unity プロジェクトを登録してください']); return; }
+    const pkg = await window.hangar.pickFile(); if (!pkg) return;
     DIFF_PKG = pkg;
     $('diffpkg').textContent = pkg.split(/[\\/]/).pop();
     $('diffproj').innerHTML = projects.map(p => '<option value="'+esc(p)+'">'+esc(p)+'</option>').join('');
@@ -141,7 +204,6 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
       return '別の場所に既存('+esc(c.existingPath)+')＝GUID二重定義の恐れ';
     return 'あなたの '+esc(c.existingPath||'')+' を上書き(版が違えばダウングレード)';
   }
-
   function renderDiff(r){
     const vt = r.verdict==='danger'?'⚠ 危険 — 取り込み前に確認を':r.verdict==='review'?'△ レビュー推奨':'✓ 衝突なし — 安全に取り込めます';
     let h = '<div><span class="dv '+r.verdict+'">'+vt+'</span></div>';
@@ -159,7 +221,7 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
       h += r.missingShader.map(s=>'<div class="dconf">この商品は '+esc(s)+' が必要ですが、対象プロジェクトに見当たりません → 先に '+esc(s)+' を導入</div>').join('');
       h += '</div>';
     } else if (r.requires && (r.requires.liltoon || r.requires.poiyomi)){
-      const need=[r.requires.liltoon?'lilToン':'',r.requires.poiyomi?'Poiyomi':''].filter(Boolean).join('+');
+      const need=[r.requires.liltoon?'lilToon':'',r.requires.poiyomi?'Poiyomi':''].filter(Boolean).join('+');
       h += '<div class="dsec"><h4 class="green">🟣 必要シェーダ: OK</h4><div class="dinfo">'+need+' は対象プロジェクトに存在</div></div>';
     }
     if (r.guidOverwrite.length){
@@ -177,12 +239,93 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
       h += '<div class="duncheck"><b>推奨アンチェック</b>（Unityのインポート窓で外すと安全）:<br>'+r.uncheckFolders.slice(0,8).map(esc).join(' ， ')+'</div>';
     return h;
   }
-
   async function runDiff(){
     const proj = $('diffproj').value;
-    $('diffbody').innerHTML = '<div class="dinfo">解析中…</div>';
+    $('diffbody').innerHTML = '<div class="dinfo"><span class="spin"></span>解析中…</div>';
     const r = await window.hangar.diff(DIFF_PKG, proj);
-    $('diffbody').innerHTML = r ? renderDiff(r) : '<div class="red">解析に失敗しました</div>';
+    $('diffbody').innerHTML = r ? renderDiff(r) : '<div class="red">解析に失敗しました（対象がUnityプロジェクトか、Assets があるか確認してください）</div>';
+  }
+
+  // ---- 再現テンプレ(save/restore) ----
+  function showTmpl(title, html){
+    $('tmpltitle').textContent = title;
+    $('tmplbody').innerHTML = html;
+    $('tmplov').style.display = 'flex';
+    const fb = $('forcebtn');
+    if (fb && LAST_RESTORE) fb.onclick = () => { $('tmplov').style.display='none'; runRestore(LAST_RESTORE.tmpl, LAST_RESTORE.proj, true); };
+  }
+  $('tmplclose').onclick = () => { $('tmplov').style.display = 'none'; };
+
+  function renderSave(m, outDir){
+    let h = '<div class="dinfo">出力: '+esc(outDir)+'</div>';
+    h += '<div class="dinfo">自作ファイル <b>'+((m.authored||[]).length)+'</b> 個を保存 / 除外 '+((m.excluded||[]).length)+'（購入物のバイトは同梱していません）</div>';
+    h += '<div class="dsec"><h4 class="green">📦 依存する購入物 ('+((m.products||[]).length)+') — 名指しのみ・復元時に再インポート</h4>';
+    h += (m.products||[]).slice(0,40).map(p=>'<div class="dconf">'+esc(p.fileName)+'<span class="sub">'+p.pct+'% 一致'+(p.requiresLilToon?' ・要lilToon':'')+(p.requiresPoiyomi?' ・要Poiyomi':'')+'</span></div>').join('');
+    if ((m.products||[]).length>40) h += '<div class="dinfo">… 他 '+((m.products||[]).length-40)+' 件</div>';
+    h += '</div>';
+    if ((m.uncertain||[]).length){
+      h += '<div class="dsec"><h4 class="yellow">❓ 出所不明の重いバイナリ ('+m.uncertain.length+') — payload非同梱（未scanの購入物の可能性）</h4>';
+      h += m.uncertain.slice(0,10).map(u=>'<div class="dconf">'+esc(u.relPath)+'</div>').join('')+'</div>';
+    }
+    if ((m.tooling||[]).length){
+      h += '<div class="dsec"><h4 class="purple">⚙ ツール/SDK (VPM) ('+m.tooling.length+') — VCC/ALCOMで復元</h4>';
+      h += m.tooling.slice(0,20).map(t=>'<div class="dconf">'+esc(t.id)+(t.version?(' @'+esc(t.version)):'')+'</div>').join('')+'</div>';
+    }
+    if ((m.warnings||[]).length) h += '<div class="duncheck"><b>注意</b><br>'+m.warnings.map(esc).join('<br>')+'</div>';
+    h += '<div class="dinfo" style="margin-top:10px">復元は「♻ テンプレ復元」→ このフォルダ と まっさらなプロジェクトを選択してください。</div>';
+    return h;
+  }
+  function renderRestore(r){
+    const reimport=(r.products||[]).filter(p=>p.status==='reimport');
+    const missing=(r.products||[]).filter(p=>p.status==='missing');
+    const present=(r.products||[]).filter(p=>p.status==='present');
+    let h = '<div class="dinfo">自作ファイル <b>'+(r.copiedFiles||0)+'</b> 個を配置'+(r.overwrittenFiles?('（上書き '+r.overwrittenFiles+'）'):'')+(r.skippedFiles?('（既存保護でスキップ '+r.skippedFiles+'）'):'')+'</div>';
+    h += '<div class="dinfo">照合: ✓所持済 '+present.length+' / ⟳要再インポート '+reimport.length+' / ✗未所持 '+missing.length+'</div>';
+    if (reimport.length){
+      h += '<div class="dsec"><h4 class="orange">⟳ 持っています → Unityで再インポート（GUID保存で参照が戻ります）</h4>';
+      h += reimport.map(p=>'<div class="dconf">'+esc(p.fileName)+(p.versionMatch===false?' ⚠別の版かも':'')+(p.libraryPath?('<span class="sub">'+esc(p.libraryPath)+'</span>'):'')+'</div>').join('')+'</div>';
+    }
+    if (missing.length){
+      h += '<div class="dsec"><h4 class="red">✗ ライブラリに見当たりません → 入手して再インポート</h4>';
+      h += missing.map(p=>'<div class="dconf">'+esc(p.fileName)+'</div>').join('')+'</div>';
+    }
+    if (present.length){
+      h += '<div class="dsec"><h4 class="green">✓ 再インポート済み ('+present.length+')</h4><div class="dinfo">'+present.map(p=>esc(p.fileName)).join(' , ')+'</div></div>';
+    }
+    if ((r.tooling||[]).length){
+      h += '<div class="dsec"><h4 class="purple">⚙ ツール/SDK は VCC/ALCOM で導入</h4>';
+      h += r.tooling.slice(0,20).map(t=>'<div class="dconf">'+esc(t.id)+(t.version?(' @'+esc(t.version)):'')+'</div>').join('')+'</div>';
+    }
+    if ((r.warnings||[]).length) h += '<div class="duncheck"><b>注意</b><br>'+r.warnings.map(esc).join('<br>')+'</div>';
+    if (r.skippedFiles) h += '<div style="margin-top:12px"><button id="forcebtn">⚠ 既存を上書きして復元 (--force)</button></div>';
+    return h;
+  }
+
+  $('savetmpl').onclick = async () => {
+    if (BUSY) return;
+    const proj = await window.hangar.pickFolder({ title: '保存する改変アバターのUnityプロジェクト(Assetsを含む)' }); if (!proj.length) return;
+    const out = await window.hangar.pickFolder({ title: 'テンプレの出力先フォルダ(空フォルダ推奨)' }); if (!out.length) return;
+    setBusy(true, 'テンプレ保存中: ' + proj[0]); clearError();
+    try {
+      const r = await window.hangar.saveTemplate(proj[0], out[0]);
+      if (!r || !r.ok) { showError('テンプレ保存に失敗しました', r && r.tail); setStatus('テンプレ保存 失敗'); }
+      else { setStatus('テンプレ保存 完了'); showTmpl('テンプレ保存 完了', renderSave(r.report || {}, out[0])); }
+    } finally { setBusy(false); }
+  };
+  $('restoretmpl').onclick = async () => {
+    if (BUSY) return;
+    const tmpl = await window.hangar.pickFolder({ title: '復元するテンプレフォルダ(manifest.json を含む)' }); if (!tmpl.length) return;
+    const proj = await window.hangar.pickFolder({ title: '復元先のまっさらなUnityプロジェクト(Assetsを含む)' }); if (!proj.length) return;
+    runRestore(tmpl[0], proj[0], false);
+  };
+  async function runRestore(tmpl, proj, force){
+    if (BUSY) return;
+    setBusy(true, 'テンプレ復元中: ' + proj); clearError();
+    try {
+      const r = await window.hangar.restoreTemplate(tmpl, proj, force);
+      if (!r || !r.ok) { showError('テンプレ復元に失敗しました', r && r.tail); setStatus('テンプレ復元 失敗'); }
+      else { LAST_RESTORE = { tmpl, proj }; setStatus('テンプレ復元 完了'); showTmpl('テンプレ復元 完了', renderRestore(r.report || {})); }
+    } finally { setBusy(false); }
   }
 
   refreshCatalog();

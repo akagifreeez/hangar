@@ -7,7 +7,7 @@ import { projectIndex } from './detect.js';
 import type { AssetKind } from './classify.js';
 
 // 共有ライブラリ判定表。これらのGUID衝突は「ピンク化/全アバター巻き添え」の高危険。
-// isShader=true(Poiyomi/lilToン)が最も危険(シェーダ降格)。
+// isShader=true(Poiyomi/lilToon)が最も危険(シェーダ降格)。
 const SHARED: { label: string; re: RegExp; isShader: boolean }[] = [
   { label: 'Poiyomi', re: /(^|\/)_?PoiyomiShaders(\/|$)/i, isShader: true },
   { label: 'Poiyomi', re: /(^|\/)com\.poiyomi/i, isShader: true },
@@ -125,7 +125,7 @@ export async function diffImport(packageFile: string, projectRoot: string, produ
 
   const looksLikeUpdateOf = findUpdateMatch(new Set(pkg.guids), projectG, products);
 
-  // 共有lib衝突のうち「別の場所」に既存があるもの = 二重定義/競合の真の危険(例: VPMのlilToン × 同梱lilToン)。
+  // 共有lib衝突のうち「別の場所」に既存があるもの = 二重定義/競合の真の危険(例: VPMのlilToon × 同梱lilToon)。
   // 「同じ場所」への上書きは(同一商品の再取込なら)良性。
   const crossLocShared = sharedOverwrite.filter(c => c.existingPath && c.incomingPath !== c.existingPath);
   // 良性の再取込: 既導入商品と高一致 かつ 別場所の共有lib重複が無い
@@ -190,7 +190,7 @@ export function formatDiffText(r: DiffReport): string {
     for (const s of r.missingShader) L.push(`    この商品は ${s} が必要ですが、対象プロジェクトに見当たりません → 先に ${s} を導入を`);
   } else if (r.requires.liltoon || r.requires.poiyomi) {
     L.push('');
-    const need = [r.requires.liltoon ? 'lilToン' : '', r.requires.poiyomi ? 'Poiyomi' : ''].filter(Boolean).join('+');
+    const need = [r.requires.liltoon ? 'lilToon' : '', r.requires.poiyomi ? 'Poiyomi' : ''].filter(Boolean).join('+');
     L.push(`🟣 必要シェーダ: OK (${need} は対象プロジェクトに存在)`);
   }
 
@@ -242,7 +242,7 @@ function diffHtmlBody(r: DiffReport): string {
     h += r.missingShader.map(s => `<div class="dconf">この商品は ${esc(s)} が必要ですが、対象プロジェクトに見当たりません → 先に ${esc(s)} を導入</div>`).join('');
     h += '</div>';
   } else if (r.requires.liltoon || r.requires.poiyomi) {
-    const need = [r.requires.liltoon ? 'lilToン' : '', r.requires.poiyomi ? 'Poiyomi' : ''].filter(Boolean).join('+');
+    const need = [r.requires.liltoon ? 'lilToon' : '', r.requires.poiyomi ? 'Poiyomi' : ''].filter(Boolean).join('+');
     h += `<div class="dsec"><h4 class="green">🟣 必要シェーダ: OK</h4><div class="dinfo">${esc(need)} は対象プロジェクトに存在</div></div>`;
   }
   if (r.guidOverwrite.length) {
