@@ -21,7 +21,7 @@ async function collectPackages(dir: string, acc: string[]): Promise<void> {
   }
 }
 
-export type ScanProgress = (i: number, total: number, p: ParsedPackage | null, file: string) => void;
+export type ScanProgress = (i: number, total: number, p: ParsedPackage | null, file: string, err?: unknown) => void;
 
 // 同一ファイルの二重登録を防ぐ正規化: ドライブ文字を大文字・区切りを / に統一。
 function canonical(p: string): string {
@@ -40,8 +40,8 @@ export async function scanDir(dir: string, cat: Catalog, cacheDir: string, onPro
       cat.upsert(parsed);
       out.push(parsed);
       onProgress?.(i + 1, paths.length, parsed, file);
-    } catch {
-      onProgress?.(i + 1, paths.length, null, file);
+    } catch (err) {
+      onProgress?.(i + 1, paths.length, null, file, err);
     }
   }
   return out;

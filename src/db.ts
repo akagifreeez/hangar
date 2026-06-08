@@ -86,9 +86,17 @@ export class Catalog {
       );
       CREATE INDEX IF NOT EXISTS idx_install_project ON install_records(project_id);
     `);
-    // 既存DB(列追加前)への後付けマイグレーション
-    for (const col of ['requires_liltoon', 'requires_poiyomi', 'has_locked']) {
-      try { this.db.exec(`ALTER TABLE packages ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`); } catch { /* 既にある */ }
+    // 既存DB(列追加前)への後付けマイグレーション。
+    // ※ cover_guid/preview_dir が抜けると upsert が「no column named cover_guid」で全件失敗するので必須。
+    const migrations: [string, string][] = [
+      ['cover_guid', 'TEXT'],
+      ['preview_dir', 'TEXT'],
+      ['requires_liltoon', 'INTEGER NOT NULL DEFAULT 0'],
+      ['requires_poiyomi', 'INTEGER NOT NULL DEFAULT 0'],
+      ['has_locked', 'INTEGER NOT NULL DEFAULT 0'],
+    ];
+    for (const [col, type] of migrations) {
+      try { this.db.exec(`ALTER TABLE packages ADD COLUMN ${col} ${type}`); } catch { /* 既にある */ }
     }
   }
 

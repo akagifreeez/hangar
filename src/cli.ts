@@ -32,11 +32,17 @@ async function main(): Promise<void> {
         const dir = args[0];
         if (!dir) return fail('usage: scan <libraryDir>');
         console.log(`scanning ${dir} (recursive, Library等は除外) ...`);
-        const res = await scanDir(dir, cat, cacheDir, (i, total, p, file) => {
+        let failCount = 0;
+        const res = await scanDir(dir, cat, cacheDir, (i, total, p, file, err) => {
           const name = basename(file);
           if (p) console.log(`  [${i}/${total}] ${name}  ${mb(p.sizeBytes)} files:${p.fileCount} prev:${p.fileCount ? Math.round(100 * p.previewCount / p.fileCount) : 0}%`);
-          else console.log(`  [${i}/${total}] ${name}  ⚠ parse失敗(スキップ)`);
+          else {
+            failCount++;
+            const msg = err instanceof Error ? err.message : String(err ?? '');
+            console.log(`  [${i}/${total}] ${name}  ⚠ parse失敗(スキップ): ${msg || '原因不明'}`);
+          }
         });
+        if (failCount) console.log(`⚠ ${failCount} 件が解析できませんでした（上の理由を確認）。書込先: ${dbPath} / cache: ${cacheDir}`);
         console.log(`scanned ${res.length} package(s) into ${dbPath}.`);
         break;
       }
