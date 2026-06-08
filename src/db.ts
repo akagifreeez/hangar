@@ -27,6 +27,8 @@ export interface Product {
   copyCount: number;
   wastedBytes: number;
   projects: { name: string; path: string; pct: number }[];
+  sig: string;              // 内容署名(GUID集合のmd5)。3Dレンダ成果物の安定キー
+  previewHashes: string[];  // この商品の各物理コピーの preview_dir basename。旧式レンダ(パスhashキー)の後方互換探索用
 }
 
 export class Catalog {
@@ -220,7 +222,7 @@ export class Catalog {
       g.push(r);
     }
     const products: Product[] = [];
-    for (const g of groups.values()) {
+    for (const [sig, g] of groups.entries()) {
       const rep = g.find(r => r.cover_guid) ?? g[0]!;
       const wasted = rep.size_bytes * (g.length - 1);
       const projMap = new Map<string, { name: string; path: string; pct: number }>();
@@ -228,7 +230,9 @@ export class Catalog {
         const ex = projMap.get(ins.ppath);
         if (!ex || ins.pct > ex.pct) projMap.set(ins.ppath, { name: ins.pname, path: ins.ppath, pct: ins.pct });
       }
-      products.push({ rep, copies: g.map(r => r.file_path), copyCount: g.length, wastedBytes: wasted, projects: [...projMap.values()].sort((a, b) => b.pct - a.pct) });
+      // 各物理コピーの preview_dir basename（旧式レンダはこのいずれかのキーで保存されている）
+      const previewHashes = g.map(r => (r.preview_dir ? r.preview_dir.split(/[\\/]/).filter(Boolean).pop() ?? '' : '')).filter(Boolean);
+      products.push({ rep, copies: g.map(r => r.file_path), copyCount: g.length, wastedBytes: wasted, projects: [...projMap.values()].sort((a, b) => b.pct - a.pct), sig, previewHashes });
     }
     products.sort((a, b) => a.rep.file_name.localeCompare(b.rep.file_name));
     return products;

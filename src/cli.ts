@@ -177,9 +177,13 @@ async function main(): Promise<void> {
           const cover = (r.cover_guid && r.preview_dir) ? dataUri(join(r.preview_dir, r.cover_guid + '.png')) : '';
           const gallery = readGallery(r.preview_dir, 12);
           const tree = buildTreeHtml(cat.packageFiles(r.id));
-          // 方式A 忠実プレビュー成果物: cache/renders/<hash>/{hero.png, viewer.html}
-          const hash = r.preview_dir ? basename(r.preview_dir) : '';
-          const renderDir = hash ? join(cacheDir, 'renders', hash) : '';
+          // 方式A 忠実プレビュー成果物: cache/renders/<key>/{hero.png, viewer.html}。
+          // 内容署名(sig・新)→各コピーのpreview_dir hash(旧式・後方互換)の順で探す（重複コピーで代表がズレても拾う）。
+          let renderDir = '';
+          for (const key of [prod.sig, ...prod.previewHashes]) {
+            const d = join(cacheDir, 'renders', key);
+            if (existsSync(join(d, 'hero.png'))) { renderDir = d; break; }
+          }
           const heroPath = renderDir ? join(renderDir, 'hero.png') : '';
           const viewerPath = renderDir ? join(renderDir, 'viewer.html') : '';
           const heroUri = heroPath && existsSync(heroPath) ? dataUri(heroPath) : '';
@@ -279,7 +283,8 @@ async function main(): Promise<void> {
         if (!lil) return fail('lilToon が見つかりません。VCC/ALCOMでlilToonを入れたプロジェクトを「プロジェクト検出」で登録するか、環境変数 HANGAR_LILTOON にパッケージのパスを指定してください');
         const poi = findPoiyomi(projectRoots);
         if (!poi) console.log('  ⚠ Poiyomi未検出 → Poiyomi系アバターはピンクになります(hangar/_shaders/com.poiyomi.toon を用意)');
-        const hash = r.preview_dir ? basename(r.preview_dir) : createHash('md5').update(r.file_path).digest('hex').slice(0, 16);
+        // レンダ成果物のキーは内容署名(GUID集合のmd5)。重複コピーでも安定し、カタログ詳細と必ず一致する。
+        const hash = createHash('md5').update((JSON.parse(r.guids_json) as string[]).slice().sort().join(',')).digest('hex');
         const hangarRoot = dirname(cacheDir);
         console.log(`render: ${r.file_name}`);
         console.log(`  Unity: ${unity}  / lilToon:有 Poiyomi:${poi ? '有' : '無'}`);
