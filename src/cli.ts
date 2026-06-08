@@ -189,7 +189,7 @@ async function main(): Promise<void> {
           const heroUri = heroPath && existsSync(heroPath) ? dataUri(heroPath) : '';
           const viewerHref = viewerPath && existsSync(viewerPath) ? relative(outDir, viewerPath).replace(/\\/g, '/') : '';
           const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : ''].filter(Boolean).join(' ');
-          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref }), name: r.file_name, tags };
+          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref }), name: r.file_name, tags, sig: prod.sig };
         });
         writeFileSync(out, renderApp(data, products.length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -271,11 +271,21 @@ async function main(): Promise<void> {
         break;
       }
       case 'render': {
-        const query = args[0];
-        if (!query) return fail('usage: render <package名の一部>');
-        const matches = cat.allPackages().filter(r => r.file_name.toLowerCase().includes(query.toLowerCase()));
-        if (!matches.length) return fail('該当パッケージなし: ' + query);
-        const r = matches[0]!;
+        // --sig <内容署名> でGUID集合一致の厳密指定(GUI/カタログから)。無ければ名前の部分一致(従来)。
+        const sigIdx = args.indexOf('--sig');
+        const sigArg = sigIdx >= 0 ? args[sigIdx + 1] : undefined;
+        const pkgSig = (row: PackageRow) => createHash('md5').update((JSON.parse(row.guids_json) as string[]).slice().sort().join(',')).digest('hex');
+        let r: PackageRow | undefined;
+        if (sigArg) {
+          r = cat.allPackages().find(row => pkgSig(row) === sigArg);
+          if (!r) return fail('該当商品が見つかりません(sig): ' + sigArg);
+        } else {
+          const query = args.find(a => !a.startsWith('--'));
+          if (!query) return fail('usage: render <package名の一部> | render --sig <hash>');
+          const matches = cat.allPackages().filter(row => row.file_name.toLowerCase().includes(query.toLowerCase()));
+          if (!matches.length) return fail('該当パッケージなし: ' + query);
+          r = matches[0]!;
+        }
         const projectRoots = cat.allProjects().map(p => p.path);
         const unity = findUnity();
         if (!unity) return fail('Unity(2022.3系)が見つかりません');
@@ -419,10 +429,12 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
   const hero = gallery[0] ?? '';
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}</span>` : '';
+  // 🎬 生成ボタン: 商品をクリック→このボタンで直接3D生成(名前入力不要)。CUR は表示中の商品インデックス。
+  const genBtn = `<button class="genbtn-d" onclick="hangarRender(CUR)" title="裏でUnity+lilToonを起動し、忠実プレビュー画像と3D(GLB)を生成します（数分）">🎬 ${render.heroUri ? '3Dを再生成' : 'この商品を3D生成'}</button>`;
   const faithful = render.heroUri
     ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` +
-      (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">▶ 3Dで回す（GLB・Unity不要）</a>` : '') + `</div>`
-    : '';
+      (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">▶ 3Dで回す（GLB・Unity不要）</a>` : '') + genBtn + `</div>`
+    : `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><div class="none">まだ生成していません（Unity + lilToon があれば本物のシェーダで焼けます）。</div>${genBtn}</div>`;
   const inst = p.projects.length
     ? `<table class="ledger"><tr><th>プロジェクト</th><th>一致</th><th>パス</th></tr>` +
       p.projects.map(pr => `<tr><td>${esc(pr.name)}</td><td class="pct">${pr.pct}%</td><td class="pth">${esc(pr.path)}</td></tr>`).join('') + `</table>`
@@ -441,7 +453,7 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
     `<h3>プレビュー画像（${gallery.length}）</h3>${gal}`;
 }
 
-function renderApp(data: { card: string; detail: string; name: string; tags: string }[], count: number): string {
+function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string }[], count: number): string {
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hangar カタログ</title><style>
@@ -452,8 +464,13 @@ header{padding:14px 20px;border-bottom:1px solid #2a2a32}
 header h1{font-size:16px;margin:0 0 2px;font-weight:600}
 header .sub{color:#888;font-size:12px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px}
-.card{background:#1e1e24;border:1px solid #2a2a32;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .1s}
+.card{position:relative;background:#1e1e24;border:1px solid #2a2a32;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .1s}
 .card:hover{border-color:#4a6cf7}
+.genbtn{position:absolute;top:6px;right:6px;background:#4a6cf7e6;border:0;color:#fff;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
+.card:hover .genbtn,.card:focus-within .genbtn,.genbtn:focus{opacity:1}
+.genbtn:hover{background:#5a78ff}
+.genbtn-d{background:#4a6cf7;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer;margin-left:10px}
+.genbtn-d:hover{background:#5a78ff}
 .thumb{aspect-ratio:1/1;background:#0e0e12;display:flex;align-items:center;justify-content:center}
 .thumb img{width:100%;height:100%;object-fit:contain}
 .noimg{color:#555;font-size:12px}
@@ -528,9 +545,14 @@ const DATA = ${json};
 const grid = document.getElementById('grid'), detail = document.getElementById('detail');
 const q = document.getElementById('q'), countEl = document.getElementById('count');
 let curFilter = 'all';
+let CUR = -1;
 function showGrid(){ detail.style.display='none'; grid.style.display='grid'; }
-function showDetail(i){ detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); }
-grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'</div>').join('');
+function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); }
+// 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
+function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig: DATA[i].sig, name: DATA[i].name}, '*'); }catch(e){} }
+// 生成完了後の再読込時に #open=<sig> が付いていたら、その商品の詳細を自動で開く(結果の忠実プレビューへ復帰)。
+function openFromHash(){ try{ var h=(location.hash||''); var m=/^#open=(.+)$/.exec(h); if(!m)return; var sig=decodeURIComponent(m[1]); var i=DATA.findIndex(function(d){return d.sig===sig;}); if(i>=0) showDetail(i); }catch(e){} }
+grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button></div>').join('');
 const cards = [...grid.children];
 function applyFilter(){
   const term = q.value.trim().toLowerCase();
@@ -553,6 +575,7 @@ for (const b of document.querySelectorAll('.filters button')){
 }
 applyFilter();
 showGrid();
+openFromHash();
 </script></body></html>`;
 }
 

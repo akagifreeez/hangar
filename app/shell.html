@@ -95,6 +95,7 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   let CAT_URL = '';
   let BUSY = false;
   let LAST_RESTORE = null;
+  let pendingOpenSig = null;   // 3D生成完了→カタログ再読込時に、その商品の詳細を自動で開く(#open=sig)
 
   const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl','render'];
   function setBusy(on, label){
@@ -114,7 +115,7 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   function showEmpty(){ $('emptymsg').style.display='none'; $('empty').style.display='flex'; $('cat').style.display='none'; }
   function showEmptyMsg(msg){ $('emptymsg').textContent = msg; $('emptymsg').style.display='block'; $('empty').style.display='flex'; $('cat').style.display='none'; }
   function showCatalog(url){ CAT_URL = url; $('empty').style.display='none'; $('cat').style.display='block'; reload(); }
-  const reload = () => { if (CAT_URL) $('cat').src = CAT_URL + (CAT_URL.includes('?')?'&':'?') + 'v=' + Date.now(); };
+  const reload = () => { if (CAT_URL) $('cat').src = CAT_URL + (CAT_URL.includes('?')?'&':'?') + 'v=' + Date.now() + (pendingOpenSig ? ('#open=' + encodeURIComponent(pendingOpenSig)) : ''); };
 
   window.hangar.onStatus(m => { if (!BUSY) setStatus(esc(m)); else setStatus('<span class="spin"></span>' + esc(m)); });
   window.hangar.onCatalogUrl(showCatalog);
@@ -169,16 +170,32 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
       setStatus(n ? ('再スキャン完了（ライブラリ' + n + '件）') : 'カタログ再生成完了');
     } finally { setBusy(false); }
   };
-  $('render').onclick = async () => {
-    if (BUSY) return;
-    const n = $('rname').value.trim(); if (!n) { setStatus('商品名を入力してください'); return; }
-    setBusy(true, '3D生成中(裏Unity・数分): ' + n); clearError();
+  // target: 文字列(名前・ツールバー) または {sig,name}(カタログのカード/詳細から・厳密指定)
+  async function runRender(target){
+    const opts = (typeof target === 'string') ? { name: target } : (target || {});
+    const label = opts.name || '指定商品';
+    if (BUSY) { setStatus('別の3D生成が進行中です。完了までお待ちください'); return; }
+    if (!opts.sig && !opts.name) { setStatus('3D生成の対象が指定されていません'); return; }
+    let caps = {}; try { caps = await window.hangar.capabilities(); } catch {}
+    if (!caps.canRender) {
+      showError('3D生成には Unity と lilToon が必要です', ['VCC/ALCOMでlilToonを入れたプロジェクトを「🎯 プロジェクト検出」で登録すると有効になります' + (caps.unity===false?' [Unity未検出]':'') + (caps.liltoon===false?' [lilToon未検出]':'')]);
+      return;
+    }
+    pendingOpenSig = opts.sig || null;   // 完了後の再読込でこの商品の詳細を自動で開く
+    setBusy(true, '3D生成中(裏Unity・数分): ' + label); clearError();
     try {
-      const r = await window.hangar.render(n);
-      if (r && r.ok) setStatus('3D生成 完了: ' + n);
-      else { showError('3D生成に失敗しました: ' + n, r && r.tail); setStatus('3D生成 失敗'); }
-    } finally { setBusy(false); }
-  };
+      const r = await window.hangar.render(opts.sig ? { sig: opts.sig, name: opts.name } : (opts.name || ''));
+      if (r && r.ok) setStatus('3D生成 完了: ' + esc(label) + (opts.sig ? '（詳細が自動で開きます）' : '（カタログで商品を開くと忠実プレビューが出ます）'));
+      else { showError('3D生成に失敗しました: ' + label, r && r.tail); setStatus('3D生成 失敗'); }
+    } finally { setBusy(false); pendingOpenSig = null; }
+  }
+  $('render').onclick = () => runRender($('rname').value.trim());
+  // カタログ(iframe)の「🎬 3D生成」ボタンからの依頼だけを受ける（送信元フレームを固定して偽メッセージを無視）。
+  window.addEventListener('message', (e) => {
+    if (e.source !== $('cat').contentWindow) return;
+    const m = e.data;
+    if (m && m.type === 'hangar-render' && (typeof m.sig === 'string' || typeof m.name === 'string')) runRender({ sig: m.sig, name: m.name });
+  });
 
   // ---- 取り込み前チェック(diff) ----
   let DIFF_PKG = '';

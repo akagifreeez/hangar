@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('hangar', {
   regen: () => ipcRenderer.invoke('regen'),
   rescan: () => ipcRenderer.invoke('rescan'),
   getConfig: () => ipcRenderer.invoke('get-config'),
-  render: (name) => ipcRenderer.invoke('render', name),
+  render: (target) => ipcRenderer.invoke('render', target),
   catalogExists: () => ipcRenderer.invoke('catalog-exists'),
   catalogUrl: () => ipcRenderer.invoke('catalog-url'),
   capabilities: () => ipcRenderer.invoke('render-capabilities'),

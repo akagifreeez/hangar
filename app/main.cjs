@@ -143,7 +143,14 @@ ipcMain.handle('rescan', async () => {
   await regen();
   return { ok, libraryDirs: c.libraryDirs || [], projectDirs: c.projectDirs || [] };
 });
-ipcMain.handle('render', async (_e, name) => { const { code, tail } = await runCli(['render', name]); await regen(); return { ok: code === 0, code, tail }; });
+// render: 文字列(名前の部分一致・従来) または {sig,name}(カタログから・内容署名で厳密指定) を受ける。
+ipcMain.handle('render', async (_e, target) => {
+  const opts = typeof target === 'string' ? { name: target } : (target || {});
+  const args = opts.sig ? ['render', '--sig', opts.sig] : ['render', opts.name || ''];
+  const { code, tail } = await runCli(args);
+  await regen();
+  return { ok: code === 0, code, tail };
+});
 ipcMain.handle('catalog-exists', () => fs.existsSync(CATALOG));
 ipcMain.handle('catalog-url', () => fs.existsSync(CATALOG) ? catalogUrl() : '');
 ipcMain.handle('open-external', (_e, url) => { shell.openExternal(url); });
