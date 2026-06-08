@@ -35,3 +35,6 @@ build/*
 商品化チェックリスト.md
 配布用テキスト.md
 dist-installer/
+config.json
+gui-catalog.html
+hangar-catalog.html
