@@ -37,6 +37,12 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 .dinfo{color:#9aa;font-size:12px;margin:5px 0}
 .duncheck{margin-top:14px;background:#23232b;border:1px solid #2f2f39;border-radius:8px;padding:10px 12px;font-size:12px;color:#cfcfd6}
 .red{color:#ff9aa8}.purple{color:#c3b6ff}.orange{color:#e7c89a}.yellow{color:#e7e0a6}.green{color:#9ae7c2}
+#prog{display:none;height:22px;background:#16161a;border-bottom:1px solid #2a2a32;position:relative;flex:0 0 auto;overflow:hidden}
+#progbar{height:100%;width:0;background:linear-gradient(90deg,#4a6cf7,#5a78ff);transition:width .15s}
+#progtxt{position:absolute;left:12px;top:0;line-height:22px;font-size:11px;color:#cfcfd6;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;right:12px}
+#progtxt .fail{color:#ff9aa8}
+body.dragging::after{content:'📦 ここにドロップ（.unitypackage=取り込み前チェック / フォルダ=スキャン）';position:fixed;inset:14px;border:3px dashed #4a6cf7;border-radius:14px;background:rgba(74,108,247,.12);color:#cfe0ff;display:flex;align-items:center;justify-content:center;font-size:16px;z-index:30;pointer-events:none}
+body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframeを透過させ、親でdrop受信(iframeがdropを食う問題の回避) */
 </style></head><body>
 <div id="bar">
   <h1>Hangar</h1>
@@ -46,11 +52,10 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック">📦 取り込み前チェック</button>
   <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
   <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
-  <input id="rname" placeholder="3D生成する商品名…" style="width:140px">
-  <button id="render" class="sec" title="">🎬 3D生成</button>
   <span class="tag">VRChat非公式・ローカル限定</span>
   <span id="status">準備完了</span>
 </div>
+<div id="prog"><div id="progbar"></div><span id="progtxt"></span></div>
 <div id="empty">
   <h2>ようこそ Hangar へ</h2>
   <p>VRChatの <span class="kbd">.unitypackage</span> を <b>展開せず</b>に棚卸し・プレビュー・導入追跡するツールです。<br>
@@ -90,20 +95,29 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 
 <script>
   const $ = id => document.getElementById(id);
-  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const setStatus = m => { $('status').innerHTML = m; };
   let CAT_URL = '';
   let BUSY = false;
   let LAST_RESTORE = null;
   let pendingOpenSig = null;   // 3D生成完了→カタログ再読込時に、その商品の詳細を自動で開く(#open=sig)
 
-  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl','render'];
+  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl'];
+  let scanFails = 0;
+  function resetProg(){ scanFails = 0; $('progbar').style.width = '0'; $('progtxt').textContent = ''; $('prog').style.display = 'none'; }
+  function setProg(done, total, label){
+    const pct = total ? Math.round(100 * done / total) : 0;
+    $('prog').style.display = 'block';
+    $('progbar').style.width = pct + '%';
+    $('progtxt').innerHTML = done + '/' + total + ' (' + pct + '%)　' + esc((label || '').slice(0, 70)) + (scanFails ? (' <span class="fail">解析失敗 ' + scanFails + '</span>') : '');
+  }
   function setBusy(on, label){
     BUSY = on;
     document.body.classList.toggle('busy', on);
     for (const id of ACTION_BTNS){ const b = $(id); if (b) b.disabled = on; }
+    if (on) resetProg();      // バーは進捗行[i/total]が来た時に setProg で表示
     if (on && label) setStatus('<span class="spin"></span>' + esc(label));
-    if (!on) refreshCaps();   // caps に応じて render ボタンの活性を戻す
+    if (!on) resetProg();
   }
   function showError(title, tail){
     const sub = (tail && tail.length) ? ' — <span style="color:#e6b6bd">' + esc(tail.join(' / ').slice(0,400)) + '</span>' : '';
@@ -117,34 +131,37 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
   function showCatalog(url){ CAT_URL = url; $('empty').style.display='none'; $('cat').style.display='block'; reload(); }
   const reload = () => { if (CAT_URL) $('cat').src = CAT_URL + (CAT_URL.includes('?')?'&':'?') + 'v=' + Date.now() + (pendingOpenSig ? ('#open=' + encodeURIComponent(pendingOpenSig)) : ''); };
 
-  window.hangar.onStatus(m => { if (!BUSY) setStatus(esc(m)); else setStatus('<span class="spin"></span>' + esc(m)); });
+  window.hangar.onStatus(m => {
+    // 進捗行 [i/total] はバーに反映(statusを流し続けない)。行頭アンカーで、ファイル名中の[1/2]等の誤検知を防ぐ。
+    const pm = /^\s*\[(\d+)\/(\d+)\]\s*(.*)$/.exec(m);
+    if (pm) { if (/parse失敗/.test(m)) scanFails++; setProg(+pm[1], +pm[2], pm[3]); return; }
+    if (!BUSY) setStatus(esc(m)); else setStatus('<span class="spin"></span>' + esc(m));
+  });
   window.hangar.onCatalogUrl(showCatalog);
 
   async function refreshCatalog(){
     const url = await window.hangar.catalogUrl();
     if (url) showCatalog(url); else showEmpty();
   }
-  async function refreshCaps(){
-    let caps = {};
-    try { caps = await window.hangar.capabilities(); } catch {}
-    const ok = !!caps.canRender;
-    if (!BUSY){ $('render').disabled = !ok; $('rname').disabled = !ok; }
-    $('render').title = ok
-      ? 'Unity + lilToon/Poiyomi で忠実プレビュー(画像+3D)を生成'
-      : '3D生成には Unity と lilToon が必要です。VCC/ALCOMでlilToonを入れたプロジェクトを「プロジェクト検出」で登録すると有効になります。'
-        + (caps.unity===false ? ' [Unity未検出]' : '') + (caps.liltoon===false ? ' [lilToon未検出]' : '');
-  }
 
+  async function doScanPath(folder){
+    if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
+    setBusy(true, 'スキャン中: ' + folder); clearError();
+    try {
+      const r = await window.hangar.scan(folder);
+      if (!r.ok) { showError('スキャンに失敗しました', r.tail); setStatus('スキャン失敗'); }
+      else if (r.count === 0) {
+        // 既にカタログがあるなら隠さず維持(差分スキャンで実害)。初回のみ空状態を出す。
+        if (CAT_URL) setStatus('0件: このフォルダに .unitypackage はありませんでした（カタログは変更なし）');
+        else showEmptyMsg('このフォルダに .unitypackage が見つかりませんでした。BOOTH のダウンロード先フォルダ（例: …\\Downloads）を選び直してください。');
+      }
+      else setStatus('スキャン完了: ' + r.count + ' 件' + (r.failed ? ('（解析失敗 ' + r.failed + '）') : ''));
+    } finally { setBusy(false); }
+  }
   const doScan = async () => {
     if (BUSY) return;
     const f = await window.hangar.pickFolder({ title: 'BOOTH等の保存先フォルダを選択' }); if (!f.length) return;
-    setBusy(true, 'スキャン中: ' + f[0]); clearError();
-    try {
-      const r = await window.hangar.scan(f[0]);
-      if (!r.ok) { showError('スキャンに失敗しました', r.tail); setStatus('スキャン失敗'); }
-      else if (r.count === 0) { showEmptyMsg('このフォルダに .unitypackage が見つかりませんでした。BOOTH のダウンロード先フォルダ（例: …\\Downloads）を選び直してください。'); setStatus('0件'); }
-      else setStatus('スキャン完了: ' + r.count + ' 件' + (r.failed ? ('（解析失敗 ' + r.failed + '）') : ''));
-    } finally { setBusy(false); }
+    doScanPath(f[0]);
   };
   $('scan').onclick = doScan;
   $('scan2').onclick = doScan;
@@ -189,7 +206,7 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
       else { showError('3D生成に失敗しました: ' + label, r && r.tail); setStatus('3D生成 失敗'); }
     } finally { setBusy(false); pendingOpenSig = null; }
   }
-  $('render').onclick = () => runRender($('rname').value.trim());
+  // 3D生成の入口はカタログのカード/詳細の🎬に一本化(ツールバーの名前入力は撤去)。
   // カタログ(iframe)の「🎬 3D生成」ボタンからの依頼だけを受ける（送信元フレームを固定して偽メッセージを無視）。
   window.addEventListener('message', (e) => {
     if (e.source !== $('cat').contentWindow) return;
@@ -199,17 +216,21 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 
   // ---- 取り込み前チェック(diff) ----
   let DIFF_PKG = '';
-  $('diffbtn').onclick = async () => {
-    if (BUSY) return;
+  async function openDiff(pkg){
+    if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
     const cfg = await window.hangar.getConfig();
     const projects = (cfg && cfg.projectDirs) || [];
     if (!projects.length) { showError('対象プロジェクトが未登録です', ['先に「🎯 プロジェクト検出」で Unity プロジェクトを登録してください']); return; }
-    const pkg = await window.hangar.pickFile(); if (!pkg) return;
     DIFF_PKG = pkg;
     $('diffpkg').textContent = pkg.split(/[\\/]/).pop();
     $('diffproj').innerHTML = projects.map(p => '<option value="'+esc(p)+'">'+esc(p)+'</option>').join('');
     $('diffov').style.display = 'flex';
     runDiff();
+  }
+  $('diffbtn').onclick = async () => {
+    if (BUSY) return;
+    const pkg = await window.hangar.pickFile(); if (!pkg) return;
+    openDiff(pkg);
   };
   $('diffclose').onclick = () => { $('diffov').style.display = 'none'; };
   $('diffrun').onclick = runDiff;
@@ -353,6 +374,22 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
     } finally { setBusy(false); }
   }
 
+  // ドラッグ&ドロップ取込: .unitypackage→取り込み前チェック / フォルダ→スキャン。
+  // 枠表示は dragover を監視するwatchdog方式(ネスト/iframeでカウンタがズレて枠が残る問題を回避)。
+  let dragT;
+  function showDrag(){ clearTimeout(dragT); document.body.classList.add('dragging'); dragT = setTimeout(() => document.body.classList.remove('dragging'), 160); }
+  document.addEventListener('dragover', (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; showDrag(); });
+  document.addEventListener('drop', async (e) => {
+    e.preventDefault(); clearTimeout(dragT); document.body.classList.remove('dragging');
+    if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
+    const paths = [...((e.dataTransfer && e.dataTransfer.files) || [])].map(f => window.hangar.getPathForFile(f)).filter(Boolean);
+    if (!paths.length) { setStatus('ドロップされた項目のパスを取得できませんでした'); return; }
+    const pkg = paths.find(p => /\.unitypackage$/i.test(p));
+    if (pkg) { openDiff(pkg); return; }                    // .unitypackage → 取り込み前チェック
+    const target = paths[0];
+    if (await window.hangar.isDirectory(target)) doScanPath(target);   // フォルダ → スキャン
+    else showError('ドロップできない種類です', ['フォルダ、または .unitypackage をドロップしてください（' + (target.split(/[\\/]/).pop()) + ' はスキャンできません）']);
+  });
+
   refreshCatalog();
-  refreshCaps();
 </script></body></html>

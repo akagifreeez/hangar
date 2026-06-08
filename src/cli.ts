@@ -545,13 +545,14 @@ const grid = document.getElementById('grid'), detail = document.getElementById('
 const q = document.getElementById('q'), countEl = document.getElementById('count');
 let curFilter = 'all';
 let CUR = -1;
-function showGrid(){ detail.style.display='none'; grid.style.display='grid'; }
-function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); }
+// 状態保持: 再スキャン/検出/3D生成のたびに iframe が再読込されても 検索/フィルタ/開いてた詳細/スクロール を復元する。
+const SKEY = 'hangar-cat-state';
+function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q: q.value, filter: curFilter, open: (detail.style.display!=='none' && CUR>=0 && DATA[CUR]) ? DATA[CUR].sig : null, scroll: window.scrollY||0 })); }catch(e){} }
+function showGrid(){ detail.style.display='none'; grid.style.display='grid'; CUR=-1; saveState(); }
+function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); saveState(); }
 // 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
 function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig: DATA[i].sig, name: DATA[i].name}, '*'); }catch(e){} }
-// 生成完了後の再読込時に #open=<sig> が付いていたら、その商品の詳細を自動で開く(結果の忠実プレビューへ復帰)。
-function openFromHash(){ try{ var h=(location.hash||''); var m=/^#open=(.+)$/.exec(h); if(!m)return; var sig=decodeURIComponent(m[1]); var i=DATA.findIndex(function(d){return d.sig===sig;}); if(i>=0) showDetail(i); }catch(e){} }
-grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button></div>').join('');
+grid.innerHTML =DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button></div>').join('');
 const cards = [...grid.children];
 function applyFilter(){
   const term = q.value.trim().toLowerCase();
@@ -565,16 +566,27 @@ function applyFilter(){
   }
   countEl.textContent = shown + ' / ' + cards.length + ' 件';
 }
-q.addEventListener('input', applyFilter);
+q.addEventListener('input', ()=>{ applyFilter(); saveState(); });
 for (const b of document.querySelectorAll('.filters button')){
   b.addEventListener('click', ()=>{
     document.querySelectorAll('.filters button').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); curFilter = b.dataset.f; applyFilter();
+    b.classList.add('on'); curFilter = b.dataset.f; applyFilter(); saveState();
   });
 }
-applyFilter();
-showGrid();
-openFromHash();
+let _scrollT; addEventListener('scroll', ()=>{ clearTimeout(_scrollT); _scrollT=setTimeout(saveState, 200); });
+// 読込時の復元: 保存していた検索/フィルタを当て、#open=sig(3D生成の結果復帰)を最優先、無ければ前回の詳細/スクロール。
+(function restore(){
+  let st=null; try{ st=JSON.parse(localStorage.getItem(SKEY)||'null'); }catch(e){}
+  if (st){
+    if (st.q) q.value = st.q;
+    if (st.filter){ curFilter = st.filter; document.querySelectorAll('.filters button').forEach(x=>x.classList.toggle('on', x.dataset.f===curFilter)); }
+  }
+  applyFilter();
+  var hm=/^#open=(.+)$/.exec(location.hash||''); var hs=hm?decodeURIComponent(hm[1]):null;
+  if (hs){ var i=DATA.findIndex(function(d){return d.sig===hs;}); if(i>=0){ showDetail(i); return; } }
+  if (st && st.open){ var j=DATA.findIndex(function(d){return d.sig===st.open;}); if(j>=0){ showDetail(j); return; } }
+  if (st && st.scroll){ scrollTo(0, st.scroll); }
+})();
 </script></body></html>`;
 }
 

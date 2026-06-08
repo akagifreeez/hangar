@@ -1,6 +1,9 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('hangar', {
+  // ドロップされた File の実パスを取得。Electron 42 では File.path が廃止のため webUtils を使う。
+  getPathForFile: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return (file && file.path) || ''; } },
+  isDirectory: (p) => ipcRenderer.invoke('is-directory', p),
   pickFolder: (opts) => ipcRenderer.invoke('pick-folder', opts),
   scan: (folder) => ipcRenderer.invoke('scan', folder),
   detect: (folders) => ipcRenderer.invoke('detect', folders),

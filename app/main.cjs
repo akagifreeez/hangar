@@ -185,10 +185,12 @@ ipcMain.handle('pick-file', async () => {
   });
   return r.canceled || !r.filePaths.length ? '' : r.filePaths[0];
 });
-ipcMain.handle('diff', async (_e, pkg, project) => {
+ipcMain.handle('diff', (_e, pkg, project) => withJob(async () => {
   const r = await runCliJson(['diff', pkg, '--project', project, '--json']);
-  return r.report;   // 失敗時 null（UI 側で原因表示）
-});
+  return r.report;   // 失敗時 null（UI 側で原因表示）。直列化で連打/D&Dの多重起動を防ぐ。
+}));
+// D&D 取込でドロップされたパスがフォルダか(=スキャン対象)を判定。ファイル(.zip等)はスキャンに回さない。
+ipcMain.handle('is-directory', (_e, p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
 // 再現テンプレ: 保存（自作分→テンプレ）/ 復元（テンプレ→まっさらなプロジェクト）。{ok, report, tail} を返す。
 ipcMain.handle('save-template', async (_e, projectDir, outDir) => {
   return await runCliJson(['save-template', projectDir, '--out', outDir, '--json']);
