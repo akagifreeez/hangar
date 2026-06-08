@@ -1,8 +1,8 @@
 // Hangar v0.1 CLI — scan / list / search / detect / installs / catalog
 import { basename, join, dirname, relative } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { guidSetHash } from './sig.js';
 import { Catalog, type PackageRow, type Product } from './db.js';
 import { scanDir } from './scan.js';
 import { projectGuids, matchPackages } from './detect.js';
@@ -253,8 +253,7 @@ async function main(): Promise<void> {
         const rows = cat.allPackages();
         const groups = new Map<string, PackageRow[]>();
         for (const r of rows) {
-          const guids = (JSON.parse(r.guids_json) as string[]).slice().sort();
-          const sig = createHash('md5').update(guids.join(',')).digest('hex');
+          const sig = guidSetHash(JSON.parse(r.guids_json) as string[]);
           let arr = groups.get(sig);
           if (!arr) { arr = []; groups.set(sig, arr); }
           arr.push(r);
@@ -274,7 +273,7 @@ async function main(): Promise<void> {
         // --sig <内容署名> でGUID集合一致の厳密指定(GUI/カタログから)。無ければ名前の部分一致(従来)。
         const sigIdx = args.indexOf('--sig');
         const sigArg = sigIdx >= 0 ? args[sigIdx + 1] : undefined;
-        const pkgSig = (row: PackageRow) => createHash('md5').update((JSON.parse(row.guids_json) as string[]).slice().sort().join(',')).digest('hex');
+        const pkgSig = (row: PackageRow) => guidSetHash(JSON.parse(row.guids_json) as string[]);
         let r: PackageRow | undefined;
         if (sigArg) {
           r = cat.allPackages().find(row => pkgSig(row) === sigArg);
@@ -294,7 +293,7 @@ async function main(): Promise<void> {
         const poi = findPoiyomi(projectRoots);
         if (!poi) console.log('  ⚠ Poiyomi未検出 → Poiyomi系アバターはピンクになります(hangar/_shaders/com.poiyomi.toon を用意)');
         // レンダ成果物のキーは内容署名(GUID集合のmd5)。重複コピーでも安定し、カタログ詳細と必ず一致する。
-        const hash = createHash('md5').update((JSON.parse(r.guids_json) as string[]).slice().sort().join(',')).digest('hex');
+        const hash = guidSetHash(JSON.parse(r.guids_json) as string[]);
         const hangarRoot = dirname(cacheDir);
         console.log(`render: ${r.file_name}`);
         console.log(`  Unity: ${unity}  / lilToon:有 Poiyomi:${poi ? '有' : '無'}`);

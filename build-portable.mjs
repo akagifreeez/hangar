@@ -8,10 +8,26 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const OUT = join(ROOT, 'release', 'Hangar-win-x64');
 const ELECTRON_DIST = join(ROOT, 'node_modules', 'electron', 'dist');
+const NODE_MODULES = join(ROOT, 'node_modules');
 
-// tar-stream の本番依存ツリー(build-portable実行時に固定)
-const PROD_DEPS = ['b4a', 'bare-events', 'bare-fs', 'bare-os', 'bare-path', 'bare-stream',
-  'bare-url', 'events-universal', 'fast-fifo', 'streamx', 'tar-stream', 'teex', 'text-decoder'];
+// 本番依存ツリーを package.json の dependencies から再帰算出(ハードコードを廃止)。
+// tar-stream 等の依存が増減しても自動追従し、欠落(=壊れた配布物になる)はビルド中断で防ぐ。
+function resolveRuntimeTree(rootDeps) {
+  const found = new Set(), missing = new Set(), seen = new Set();
+  const queue = [...rootDeps];
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const pj = join(NODE_MODULES, name, 'package.json');
+    if (!existsSync(pj)) { missing.add(name); continue; }
+    found.add(name);
+    try { for (const d of Object.keys(JSON.parse(readFileSync(pj, 'utf8')).dependencies || {})) queue.push(d); } catch { /* ignore */ }
+  }
+  return { found: [...found], missing: [...missing] };
+}
+const rootDeps = Object.keys(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).dependencies || {});
+const { found: PROD_DEPS, missing: MISSING_DEPS } = resolveRuntimeTree(rootDeps);
 
 const APP_FILES = ['package.json', 'LICENSE', 'README.md', 'PRIVACY.md', 'THIRD_PARTY_NOTICES.md'];
 const APP_DIRS = ['render-template'];                          // dist は .js のみ別途コピー、app/ も個別に絞る
@@ -27,6 +43,9 @@ function dirSize(p) {
 
 if (!existsSync(ELECTRON_DIST)) { console.error('Electron dist が無い。npm install してください: ' + ELECTRON_DIST); process.exit(1); }
 if (!existsSync(join(ROOT, 'dist', 'cli.js'))) { console.error('dist/cli.js が無い。先に npm run build を実行してください'); process.exit(1); }
+// 本番依存の欠落は「起動時クラッシュの壊れた配布物」になるので、警告で素通りさせずビルド中断する。
+if (MISSING_DEPS.length) { console.error('✗ 本番依存が node_modules に欠落: ' + MISSING_DEPS.join(', ') + '\n  → npm install してから再試行。配布を中断します。'); process.exit(1); }
+console.log(`本番依存ツリー: ${PROD_DEPS.length} パッケージ (package.json dependencies から動的算出)`);
 
 // dist 完全性チェック: cli.js 等がimportする相対モジュールが全て dist/ に在るか。
 // （以前 diff.js/template.js が欠けた版を配布してしまった事故を再発させない配布前ゲート）
@@ -70,10 +89,10 @@ for (const f of readdirSync(join(ROOT, 'app'))) {
   if (/^probe/.test(f)) continue;
   if (/\.(cjs|html)$/.test(f)) cpSync(join(ROOT, 'app', f), join(APP, 'app', f));
 }
-// dist は .js / .js.map のみコピー(electron-builder の win-unpacked 等が紛れ込まないように)
+// dist は .js のみコピー(electron-builder の win-unpacked 等の混入防止。source map は配布不要)
 mkdirSync(join(APP, 'dist'), { recursive: true });
 for (const f of readdirSync(join(ROOT, 'dist'))) {
-  if (f.endsWith('.js') || f.endsWith('.js.map')) cpSync(join(ROOT, 'dist', f), join(APP, 'dist', f));
+  if (f.endsWith('.js')) cpSync(join(ROOT, 'dist', f), join(APP, 'dist', f));
 }
 for (const d of APP_DIRS) cpSync(join(ROOT, d), join(APP, d), { recursive: true });
 for (const f of APP_FILES) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(APP, f));
@@ -85,7 +104,7 @@ const NM = join(APP, 'node_modules');
 mkdirSync(NM, { recursive: true });
 for (const dep of PROD_DEPS) {
   const src = join(ROOT, 'node_modules', dep);
-  if (!existsSync(src)) { console.warn('  ⚠ 依存が見つからない(スキップ): ' + dep); continue; }
+  // 欠落は上の MISSING_DEPS チェックで既に中断済み。ここに来るものは存在が保証されている。
   cpSync(src, join(NM, dep), { recursive: true });
 }
 

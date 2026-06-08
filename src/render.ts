@@ -141,19 +141,31 @@ export async function renderPackage(opts: {
 
   const renderDir = join(cacheDir, 'renders', hash);
   const unityOut = join(renderDir, '_unity');
+  rmSync(unityOut, { recursive: true, force: true });   // 前回/別実行の残骸を消し「今回生成された出力」だけで成否判定
   mkdirSync(unityOut, { recursive: true });
   const logFile = join(renderDir, 'unity.log');
   const env = { ...process.env } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
-  spawnSync(unityExe, ['-batchmode', '-projectPath', renderProjDir, '-executeMethod', 'RenderPreview.Run', '-logFile', logFile, '--out', unityOut, '-quit'],
+  // spawnSync は非0終了/タイムアウトでも throw しない。戻り値で起動失敗/SIGTERM/異常終了を判定する。
+  const res = spawnSync(unityExe, ['-batchmode', '-projectPath', renderProjDir, '-executeMethod', 'RenderPreview.Run', '-logFile', logFile, '--out', unityOut, '-quit'],
     { env, stdio: 'ignore', timeout: 12 * 60 * 1000 });
 
+  // unityOut は直前に消してあるので、ここに在る出力は必ず「今回の実行」が生成したもの。
   const heroSrc = ['model_34.png', 'model_front.png', 'model_side.png'].map(f => join(unityOut, f)).find(p => existsSync(p));
   let hero = false, glb = false;
   if (heroSrc) { copyFileSync(heroSrc, join(renderDir, 'hero.png')); hero = true; }
   const glbSrc = join(unityOut, 'model.glb');
   if (existsSync(glbSrc)) { writeViewerHtml(glbSrc, join(renderDir, 'viewer.html')); glb = true; }
-  return { ok: hero || glb, hero, glb, logFile };
+  if (!hero && !glb) {
+    // 成果物ゼロ＝失敗。Unityの終了コードは警告等で不安定なので、出力が在れば成功扱い・無ければ理由を添えて失敗。
+    const reason = res.error ? ('Unity起動に失敗しました: ' + res.error.message)
+      : res.signal ? (`Unityがタイムアウト/強制終了されました(${res.signal})`)
+      : (res.status != null && res.status !== 0) ? (`Unityが異常終了しました(code ${res.status})`)
+      : 'Unityが画像/GLBを生成しませんでした(シェーダ未検出・ライセンス等)';
+    log('  ⚠ ' + reason + ' → ログ: ' + logFile);
+    return { ok: false, hero, glb, logFile };
+  }
+  return { ok: true, hero, glb, logFile };
 }
 
 function writeViewerHtml(glbPath: string, outHtml: string): void {

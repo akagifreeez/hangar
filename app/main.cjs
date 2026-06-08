@@ -9,6 +9,14 @@ const fs = require('node:fs');
 
 app.setName('Hangar');                                    // userData = %APPDATA%\Hangar に固定
 
+// 多重起動防止: 2プロセスが同じ hangar.db / config.json / gui-catalog.html を同時書き込みして壊すのを防ぐ。
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+}
+
 const ROOT = path.join(__dirname, '..');                  // hangar アプリ本体(読み取り専用になりうる)
 const CLI = path.join(ROOT, 'dist', 'cli.js');            // コンパイル済みCLI(tsx不要)
 
@@ -65,6 +73,17 @@ function runCli(args, onLine) {
   });
 }
 
+// stdout から JSON 値を頑健に取り出す: まず各行を末尾から JSON.parse(--json は1値を出す約束)、
+// だめなら貪欲抽出(pretty複数行JSON)にフォールバック。ログ行に括弧が混じっても壊れにくい。
+function parseJsonLoose(out) {
+  const lines = String(out).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!/^[[{]/.test(lines[i])) continue;
+    try { return JSON.parse(lines[i]); } catch { /* try earlier line */ }
+  }
+  try { return JSON.parse((out.match(/[[{][\s\S]*[}\]]/) || ['null'])[0]); } catch { return null; }
+}
+
 // CLIをJSONモードで実行し最初のJSON値を返す(diff/template/caps 用)。{ok, code, report, tail}。
 function runCliJson(args) {
   return new Promise((resolve) => {
@@ -75,8 +94,7 @@ function runCliJson(args) {
     child.stdout.on('data', (d) => out += d.toString());
     child.stderr.on('data', (d) => { const t = d.toString().trim(); if (t && !/ExperimentalWarning|trace-warnings/.test(t)) err.push(t); });
     child.on('close', (code) => {
-      let report = null;
-      try { report = JSON.parse((out.match(/[[{][\s\S]*[}\]]/) || ['null'])[0]); } catch { report = null; }
+      const report = parseJsonLoose(out);
       resolve({ ok: code === 0 && report != null, code: code == null ? 0 : code, report, tail: err.slice(-6) });
     });
     child.on('error', (e) => resolve({ ok: false, code: -1, report: null, tail: ['CLI起動失敗: ' + e.message] }));
@@ -84,6 +102,11 @@ function runCliJson(args) {
 }
 
 async function regen() { await runCli(['catalog', CATALOG]); send('catalog-url', catalogUrl()); }
+
+// 重い書き込み系(scan/detect/rescan/render/regen)を直列化し、DB/カタログHTML/configの同時書込破損を防ぐ。
+// renderer 側 BUSY フラグの抜け(IPC直叩き・連打・将来のD&D)に対する main 側の最終防壁。
+let jobChain = Promise.resolve();
+function withJob(fn) { const run = jobChain.then(fn, fn); jobChain = run.then(() => {}, () => {}); return run; }
 
 function createWindow() {
   win = new BrowserWindow({
@@ -111,7 +134,7 @@ ipcMain.handle('pick-folder', async (_e, opts) => {
   return r.canceled ? [] : r.filePaths;
 });
 // スキャン: 登録件数/解析失敗件数を返し、0件は呼び出し側で「無言成功」にしない。0件ならカタログに切り替えない。
-ipcMain.handle('scan', async (_e, folder) => {
+ipcMain.handle('scan', (_e, folder) => withJob(async () => {
   remember('libraryDirs', [folder]);
   let count = null, failed = 0;
   const { code, tail } = await runCli(['scan', folder], (l) => {
@@ -120,37 +143,37 @@ ipcMain.handle('scan', async (_e, folder) => {
   });
   if (code === 0 && (count == null || count > 0)) await regen();
   return { ok: code === 0, code, count: count == null ? 0 : count, failed, tail };
-});
-// 検出: .meta総数と導入済み商品数を集計して返す(metaTotal=0 は「Assets違い」を疑える)。
-ipcMain.handle('detect', async (_e, folders) => {
+}));
+// 検出: .meta総数と導入済み商品数を集計して返す(metaTotal=0 は「Assets違い」を疑える)。失敗時は regen しない(有効カタログ保護)。
+ipcMain.handle('detect', (_e, folders) => withJob(async () => {
   remember('projectDirs', folders);
   let metaTotal = 0, installed = 0;
   const { code, tail } = await runCli(['detect', '--save', ...folders], (l) => {
     const m = l.match(/\.meta:(\d+)/); if (m) metaTotal += +m[1];
     if (/INSTALLED/.test(l)) installed++;
   });
-  await regen();
+  if (code === 0) await regen();
   return { ok: code === 0, code, metaTotal, installed, tail };
-});
-ipcMain.handle('regen', async () => { await regen(); return true; });
+}));
+ipcMain.handle('regen', () => withJob(async () => { await regen(); return true; }));
 ipcMain.handle('get-config', () => loadConfig());
 // 記憶済みライブラリ/プロジェクトを全部やり直して差分を取り込む
-ipcMain.handle('rescan', async () => {
+ipcMain.handle('rescan', (_e) => withJob(async () => {
   const c = loadConfig();
   let ok = true;
   for (const d of c.libraryDirs || []) { send('status', '再スキャン: ' + d); const r = await runCli(['scan', d]); if (r.code !== 0) ok = false; }
   if ((c.projectDirs || []).length) { send('status', 'プロジェクト再検出...'); const r = await runCli(['detect', '--save', ...c.projectDirs]); if (r.code !== 0) ok = false; }
-  await regen();
+  if (ok || fs.existsSync(CATALOG)) await regen();
   return { ok, libraryDirs: c.libraryDirs || [], projectDirs: c.projectDirs || [] };
-});
-// render: 文字列(名前の部分一致・従来) または {sig,name}(カタログから・内容署名で厳密指定) を受ける。
-ipcMain.handle('render', async (_e, target) => {
+}));
+// render: 文字列(名前の部分一致・従来) または {sig,name}(カタログから・内容署名で厳密指定) を受ける。失敗時は regen しない。
+ipcMain.handle('render', (_e, target) => withJob(async () => {
   const opts = typeof target === 'string' ? { name: target } : (target || {});
   const args = opts.sig ? ['render', '--sig', opts.sig] : ['render', opts.name || ''];
   const { code, tail } = await runCli(args);
-  await regen();
+  if (code === 0) await regen();
   return { ok: code === 0, code, tail };
-});
+}));
 ipcMain.handle('catalog-exists', () => fs.existsSync(CATALOG));
 ipcMain.handle('catalog-url', () => fs.existsSync(CATALOG) ? catalogUrl() : '');
 ipcMain.handle('open-external', (_e, url) => { shell.openExternal(url); });
@@ -182,6 +205,7 @@ ipcMain.handle('render-capabilities', async () => {
 });
 
 app.whenReady().then(() => {
+  if (!gotSingleInstanceLock) return;   // 2つ目のインスタンスは窓を作らず終了
   createWindow();
   if (SMOKE) {
     win.webContents.once('did-finish-load', () => {

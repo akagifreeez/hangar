@@ -1,7 +1,8 @@
 // ライブラリフォルダを再帰走査して .unitypackage を解析・カタログ登録する。
 // Unityの Library/PackageCache 等のノイズは除外。
 import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parsePackage, type ParsedPackage } from './unitypackage.js';
 import type { Catalog } from './db.js';
@@ -23,9 +24,12 @@ async function collectPackages(dir: string, acc: string[]): Promise<void> {
 
 export type ScanProgress = (i: number, total: number, p: ParsedPackage | null, file: string, err?: unknown) => void;
 
-// 同一ファイルの二重登録を防ぐ正規化: ドライブ文字を大文字・区切りを / に統一。
+// 同一ファイルの二重登録を防ぐ正規化: 実パス(symlink/8.3短縮名/実ケースを解決)→ドライブ文字大文字+区切り /。
+// realpath が失敗(存在しない等)なら resolve で ./.. を畳んでから文字列正規化にフォールバック。
 function canonical(p: string): string {
-  return p.replace(/\\/g, '/').replace(/^([a-z]):/, (_m, d) => d.toUpperCase() + ':');
+  let real: string;
+  try { real = realpathSync.native(p); } catch { real = resolve(p); }
+  return real.replace(/\\/g, '/').replace(/^([a-z]):/, (_m, d) => d.toUpperCase() + ':');
 }
 
 export async function scanDir(dir: string, cat: Catalog, cacheDir: string, onProgress?: ScanProgress): Promise<ParsedPackage[]> {

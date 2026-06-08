@@ -1,6 +1,6 @@
 // カタログDB（Node内蔵 node:sqlite）。製品スキーマの最小サブセット。
 import { DatabaseSync } from 'node:sqlite';
-import { createHash } from 'node:crypto';
+import { guidSetHash } from './sig.js';
 import type { ParsedPackage } from './unitypackage.js';
 
 export interface PackageRow {
@@ -216,7 +216,7 @@ export class Catalog {
     }
     const groups = new Map<string, PackageRow[]>();
     for (const r of rows) {
-      const sig = createHash('md5').update((JSON.parse(r.guids_json) as string[]).slice().sort().join(',')).digest('hex');
+      const sig = guidSetHash(JSON.parse(r.guids_json) as string[]);
       let g = groups.get(sig);
       if (!g) { g = []; groups.set(sig, g); }
       g.push(r);

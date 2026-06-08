@@ -10,7 +10,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync, mkdirSync, copyFileSync, statSync, writeFileSync, readFileSync, readdirSync, rmSync, lstatSync } from 'node:fs';
 import { join, relative, dirname, basename, extname } from 'node:path';
-import { createHash } from 'node:crypto';
+import { guidSetHash } from './sig.js';
 import { projectGuids, matchPackages } from './detect.js';
 import { classify, type AssetKind } from './classify.js';
 import { extractRefs, buildDerivativeInfo, type AuthoredNode } from './refwalk.js';
@@ -100,10 +100,6 @@ export interface TemplateManifest {
 export interface CatalogPkg { id: number; file_name: string; file_path: string; guids: string[]; requires_liltoon: number; requires_poiyomi: number; has_locked: number; }
 
 export interface SaveResult { manifest: TemplateManifest; outDir: string; copiedBytes: number; purchasedSkipped: number; }
-
-function guidSetHash(guids: string[]): string {
-  return createHash('md5').update(guids.slice().sort().join(',')).digest('hex');
-}
 
 // .meta から GUID を読む（先頭だけ）。
 async function metaGuid(metaAbs: string): Promise<string | undefined> {
@@ -407,12 +403,22 @@ export async function restoreTemplate(templateDir: string, projectDir: string, c
   if (!Array.isArray(manifest.products)) throw new Error('テンプレが壊れています（products が配列でない）');
   if (!existsSync(join(projectDir, 'Assets'))) throw new Error('復元先がUnityプロジェクトに見えません(Assets/ が無い): ' + projectDir);
 
-  // 1. payload を fresh プロジェクトへコピー（書き込みはこの projectDir のみ）。既定は no-overwrite。
+  // 1. payload を fresh プロジェクトへコピー（書き込みはこの projectDir のみ）。
+  //    自作アセット(payload/Assets)だけを Assets へ復元。ProjectSettings/Packages は復元先プロジェクトの設定を
+  //    尊重し「既存があれば触らない」(--force 時のみ上書き)＝他人のプロジェクト設定/VPM構成を汚染しない。
   const payloadRoot = join(templateDir, 'payload');
   let copied = 0, overwritten = 0, skipped = 0;
-  if (existsSync(payloadRoot)) {
-    const res = copyTreeCounting(payloadRoot, projectDir, { force: !!opts.force });
-    copied = res.copied; overwritten = res.overwritten; skipped = res.skipped;
+  const payAssets = join(payloadRoot, 'Assets');
+  if (existsSync(payAssets)) {
+    const res = copyTreeCounting(payAssets, join(projectDir, 'Assets'), { force: !!opts.force });
+    copied = res.copied; overwritten = res.overwritten; skipped = res.skipped;   // 件数は自作ファイルのみ
+  }
+  for (const name of ['ProjectSettings', 'Packages']) {
+    const src = join(payloadRoot, name);
+    if (!existsSync(src)) continue;
+    const dst = join(projectDir, name);
+    if (existsSync(dst) && !opts.force) continue;   // 復元先の既存設定/VPM構成は保護
+    copyTreeCounting(src, dst, { force: !!opts.force });
   }
 
   // 2. 照合台帳。復元後の fresh プロジェクトGUIDで「もう再インポート済みか」を判定。

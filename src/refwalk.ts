@@ -12,12 +12,6 @@
 
 const GUID_REF = /guid:\s*([0-9a-f]{32})/g;
 
-// ツール/SDK商品(無償シェーダ/SDK)判定。プラットフォーム一般語('vrchat' 等)はBOOTHの購入アバター名に
-// 頻出する(例 ManukaForVRChat / Selestia_VRChat_Avatar)ため素の部分一致に使わない。配布物として
-// 識別性の高いツール名/パッケージID のみに限定する(購入物の誤ツール化＝派生握りつぶしを防ぐ)。
-const TOOL_PRODUCT_RE = /liltoon|lilxyzw|poiyomi|thry|vrcsdk|com\.vrchat|nadena|modular ?avatar|vrcfury|dynamic ?bone/i;
-export function isToolProduct(fileName: string): boolean { return TOOL_PRODUCT_RE.test(fileName); }
-
 // Unity組み込みGUID(全0、または1文字だけ非0: 例 0000000000000000f000000000000000)。解決済み(無害)扱い。
 export function isBuiltinGuid(g: string): boolean { let n = 0; for (const c of g) if (c !== '0') n++; return n <= 1; }
 // 既知の無償ツールのアセットGUID(VPM導入でカタログに載らないがツール=無害)。マテリアルのシェーダ参照等。
@@ -41,8 +35,6 @@ export function extractRefs(yamlText: string): { refs: string[]; typeGuids: stri
   while ((t = TYPE_LINE.exec(yamlText))) typeGuids.add(t[1]!);
   return { refs: [...refs], typeGuids: [...typeGuids] };
 }
-// 旧API互換（全参照のみ）。
-export function extractGuidRefs(yamlText: string): string[] { return extractRefs(yamlText).refs; }
 
 export interface AuthoredNode { relPath: string; guid: string; refs: string[]; typeGuids?: string[] }
 export interface FileDerivative {
@@ -59,7 +51,7 @@ export interface DerivativeResult {
  * 自作ノード群の参照を推移的に辿り、各ファイルがどの購入商品を参照するか・未解決参照がいくつあるかを算出。
  * - allProductGuids: 全カタログ商品GUID(購入物判定)。
  * - guidToProduct: guid → 商品ファイル名(表示用)。
- * ツール商品(isToolProduct)・組み込み/既知ツールGUIDは依存・派生・未解決いずれにも数えない。
+ * 型参照(シェーダ/スクリプト)・組み込み/既知ツールGUIDは依存・派生・未解決いずれにも数えない。
  */
 export function buildDerivativeInfo(
   nodes: AuthoredNode[],
@@ -69,13 +61,18 @@ export function buildDerivativeInfo(
   const byGuid = new Map<string, AuthoredNode>();
   for (const n of nodes) if (n.guid && !byGuid.has(n.guid)) byGuid.set(n.guid, n);
 
+  // 全ノードのシェーダ/スクリプト(型)参照を集約。型参照GUID = ツール/SDK扱い(派生でも未識別でもない)。
+  // これを「ファイル名で isToolProduct 判定」の代わりに使うことで、(a)推移先の子マテリアルのシェーダ参照を
+  // 未識別に誤カウントしない、(b)商品名にツール名(poiyomi等)を含む“購入アバター”を握りつぶさない、を両立する。
+  const typeGuidsGlobal = new Set<string>();
+  for (const n of nodes) for (const t of (n.typeGuids ?? [])) typeGuidsGlobal.add(t);
+
   const referencedProductGuids = new Set<string>();
   const perFile = new Map<string, FileDerivative>();
 
   for (const n of nodes) {
     const seen = new Set<string>();
     const products = new Set<string>();
-    const typeSet = new Set(n.typeGuids ?? []);          // シェーダ/スクリプト参照は未識別に数えない
     let unresolved = 0;
     const stack = [...n.refs];
     while (stack.length) {
@@ -84,15 +81,16 @@ export function buildDerivativeInfo(
       seen.add(g);
       if (g === n.guid) continue;                       // 自分自身は無視
       if (allProductGuids.has(g)) {
-        const pn = guidToProduct.get(g);
-        if (pn && !isToolProduct(pn)) { products.add(pn); referencedProductGuids.add(g); }
+        // 型参照(シェーダ/スクリプト)として使われる購入物GUIDはツール扱い→収穫しない(無償シェーダ等)。
+        // それ以外(テクスチャ/メッシュ等のコンテンツ参照)は購入コンテンツ＝依存/派生として収穫。
+        if (!typeGuidsGlobal.has(g)) { const pn = guidToProduct.get(g); if (pn) { products.add(pn); referencedProductGuids.add(g); } }
         continue;                                       // 購入物GUIDの先は辿らない(中身は持っていない)
       }
       const child = byGuid.get(g);
       if (child) { for (const r of child.refs) if (!seen.has(r)) stack.push(r); continue; }
       // 未解決: 購入カタログにも自作にも無い。組み込み/既知ツール/型(シェーダ・スクリプト)参照は無害、
       // それ以外（テクスチャ等のコンテンツ参照）は未識別＝未scan購入物の疑い。
-      if (!isBuiltinGuid(g) && !KNOWN_TOOL_GUIDS.has(g) && !typeSet.has(g)) unresolved++;
+      if (!isBuiltinGuid(g) && !KNOWN_TOOL_GUIDS.has(g) && !typeGuidsGlobal.has(g)) unresolved++;
     }
     perFile.set(n.relPath, { referencesPurchased: products.size > 0, products: [...products], unresolved });
   }

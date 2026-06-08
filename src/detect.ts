@@ -40,8 +40,12 @@ export async function projectIndex(projectRoot: string, opts: { includePackages?
     try {
       const head = (await readFile(file)).subarray(0, 400).toString('utf8');
       const m = GUID_LINE.exec(head);
-      // Assetsを優先(同一GUIDがPackagesにもある稀ケースはAssets側のパスを残す)
-      if (m && m[1] && !guidToPath.has(m[1])) { guidToPath.set(m[1], rel); pathToGuid.set(rel, m[1]); }
+      if (m && m[1]) {
+        // guid→path はAssets優先で先勝ち(同一GUIDがPackagesにもある稀ケースはAssets側を残す)。
+        if (!guidToPath.has(m[1])) guidToPath.set(m[1], rel);
+        // path→guid は GUID重複に関係なく全パスを索引(同一GUIDの2件目のパス衝突検出を取りこぼさない)。
+        if (!pathToGuid.has(rel)) pathToGuid.set(rel, m[1]);
+      }
     } catch { /* unreadable meta は無視 */ }
   };
 
@@ -79,6 +83,10 @@ export interface DetectHit {
   installed: boolean;
 }
 
+// 小片パッケージ(GUID数が極小)の偶然一致で pct=100% になり誤 INSTALLED するのを防ぐ最小一致数。
+// diff.ts findUpdateMatch の `guids.length < 20` 除外・template.ts の MIN_MATCH と同じ閾値思想。
+export const MIN_MATCH = 3;
+
 export function matchPackages(
   projectGuidSet: Set<string>,
   packages: { id: number; file_name: string; guids: string[] }[],
@@ -89,6 +97,6 @@ export function matchPackages(
     for (const g of p.guids) if (projectGuidSet.has(g)) matched++;
     const total = p.guids.length;
     const pct = total ? (100 * matched) / total : 0;
-    return { packageId: p.id, fileName: p.file_name, matched, total, pct, installed: pct >= threshold };
+    return { packageId: p.id, fileName: p.file_name, matched, total, pct, installed: pct >= threshold && matched >= MIN_MATCH };
   });
 }
