@@ -10,6 +10,7 @@ import { projectGuids, matchPackages } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
 import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, type CatalogPkg } from './template.js';
 import { renderPackage, findUnity, findLilToon, findPoiyomi } from './render.js';
+import { categoryLabel } from './classify.js';
 
 // 並列スキャン(gunzip=スレッドプール)用にプールを広げる。libuvは初回スレッドプール利用時に読むので、scan前のここで設定。
 if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = String(Math.max(4, Math.min(16, cpus().length || 4)));
@@ -188,8 +189,9 @@ async function main(): Promise<void> {
           const viewerPath = renderDir ? join(renderDir, 'viewer.html') : '';
           const heroUri = heroPath && existsSync(heroPath) ? dataUri(heroPath) : '';
           const viewerHref = viewerPath && existsSync(viewerPath) ? relative(outDir, viewerPath).replace(/\\/g, '/') : '';
-          const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : ''].filter(Boolean).join(' ');
-          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref }), name: r.file_name, tags, sig: prod.sig };
+          const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : '', `cat-${prod.category}`].filter(Boolean).join(' ');
+          // tags/category は固定語彙だが、data-tags 属性へ素で埋めるため念のためエスケープ(DOM注入の多層防御)。
+          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref }), name: r.file_name, tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
         });
         writeFileSync(out, renderApp(data, products.length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -413,12 +415,17 @@ function shaderBadges(r: PackageRow): string {
   return b.length ? `<div class="shbadges">${b.join('')}</div>` : '';
 }
 
+// パッケージ種別バッジ(3Dモデル/ツール/アニメ/マテリアル)。色は CSS .cat-<category>。
+function catBadge(category: string): string {
+  return `<span class="catb cat-${esc(category)}">${esc(categoryLabel(category as never))}</span>`;
+}
+
 function renderCard(p: Product, cover: string): string {
   const r = p.rep;
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}・無駄${mb(p.wastedBytes)}</span>` : '';
   const badge = p.projects.length ? `<div class="cb">導入 ${p.projects.length}プロジェクト</div>` : `<div class="cb none">未導入</div>`;
   const thumb = cover ? `<img src="${cover}" loading="lazy">` : `<div class="noimg">no preview</div>`;
-  return `<div class="thumb">${thumb}</div><div class="cbody"><div class="name">${esc(r.file_name)} ${dup}</div>` +
+  return `<div class="thumb">${catBadge(p.category)}${thumb}</div><div class="cbody"><div class="name">${esc(r.file_name)} ${dup}</div>` +
     `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${badge}</div>`;
 }
 
@@ -428,12 +435,17 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
   const hero = gallery[0] ?? '';
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}</span>` : '';
-  // 🎬 生成ボタン: 商品をクリック→このボタンで直接3D生成(名前入力不要)。CUR は表示中の商品インデックス。
-  const genBtn = `<button class="genbtn-d" onclick="hangarRender(CUR)" title="裏でUnity+lilToonを起動し、忠実プレビュー画像と3D(GLB)を生成します（数分）">🎬 ${render.heroUri ? '3Dを再生成' : 'この商品を3D生成'}</button>`;
+  // 🎬 生成ボタン/忠実プレビュー欄は「3Dモデル」のみ(シェーダ/SDK/アニメは3Dプレビュー対象外)。
+  // ただし既に焼いた成果物があるならカテゴリに関わらず表示する。
+  const genBtn = p.category === 'model'
+    ? `<button class="genbtn-d" onclick="hangarRender(CUR)" title="裏でUnity+lilToonを起動し、忠実プレビュー画像と3D(GLB)を生成します（数分）">🎬 ${render.heroUri ? '3Dを再生成' : 'この商品を3D生成'}</button>`
+    : '';
   const faithful = render.heroUri
     ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` +
       (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">▶ 3Dで回す（GLB・Unity不要）</a>` : '') + genBtn + `</div>`
-    : `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><div class="none">まだ生成していません（Unity + lilToon があれば本物のシェーダで焼けます）。</div>${genBtn}</div>`;
+    : (p.category === 'model'
+      ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><div class="none">まだ生成していません（Unity + lilToon があれば本物のシェーダで焼けます）。</div>${genBtn}</div>`
+      : '');
   const inst = p.projects.length
     ? `<table class="ledger"><tr><th>プロジェクト</th><th>一致</th><th>パス</th></tr>` +
       p.projects.map(pr => `<tr><td>${esc(pr.name)}</td><td class="pct">${pr.pct}%</td><td class="pth">${esc(pr.path)}</td></tr>`).join('') + `</table>`
@@ -444,7 +456,7 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
     : '';
   const gal = gallery.length ? `<div class="gallery">${gallery.map(g => `<img src="${g}" loading="lazy">`).join('')}</div>` : `<div class="none">preview.png なし</div>`;
   return `<div class="dhead">${hero ? `<img class="dhero" src="${hero}">` : ''}<div><h2>${esc(r.file_name)} ${dup}</h2>` +
-    `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}<div class="chips">${chips}</div></div></div>` +
+    `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}<div class="chips">${chips}</div></div></div>` +
     faithful +
     `<h3>導入先（取り込み後の追跡）</h3>${inst}` +
     copies +
@@ -452,7 +464,7 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
     `<h3>プレビュー画像（${gallery.length}）</h3>${gal}`;
 }
 
-function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string }[], count: number): string {
+function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string }[], count: number): string {
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hangar カタログ</title><style>
@@ -470,7 +482,11 @@ header .sub{color:#888;font-size:12px}
 .genbtn:hover{background:#5a78ff}
 .genbtn-d{background:#4a6cf7;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer;margin-left:10px}
 .genbtn-d:hover{background:#5a78ff}
-.thumb{aspect-ratio:1/1;background:#0e0e12;display:flex;align-items:center;justify-content:center}
+.thumb{aspect-ratio:1/1;background:#0e0e12;display:flex;align-items:center;justify-content:center;position:relative}
+.catb{position:absolute;top:6px;left:6px;font-size:11px;padding:2px 7px;border-radius:6px;font-weight:600;z-index:2}
+.cat-model{background:#234a3ae6;color:#9ae7c2}.cat-tool{background:#4a3a23e6;color:#e7c89a}
+.cat-animation{background:#3a2a4ae6;color:#c3b6ff}.cat-material{background:#23354ae6;color:#9ac2e7}.cat-other{background:#2a2a32e6;color:#9a9aa2}
+.dhead .catb{position:static;display:inline-block}
 .thumb img{width:100%;height:100%;object-fit:contain}
 .noimg{color:#555;font-size:12px}
 .cbody{padding:10px 12px}
@@ -528,6 +544,10 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
   <input id="q" type="search" placeholder="名前で検索…">
   <div class="filters">
     <button data-f="all" class="on">すべて</button>
+    <button data-f="cat-model">3Dモデル</button>
+    <button data-f="cat-tool">ツール</button>
+    <button data-f="cat-animation">アニメ</button>
+    <button data-f="cat-material">マテリアル</button>
     <button data-f="installed">導入済</button>
     <button data-f="notinstalled">未導入</button>
     <button data-f="dup">重複あり</button>
@@ -552,7 +572,7 @@ function showGrid(){ detail.style.display='none'; grid.style.display='grid'; CUR
 function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); saveState(); }
 // 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
 function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig: DATA[i].sig, name: DATA[i].name}, '*'); }catch(e){} }
-grid.innerHTML =DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button></div>').join('');
+grid.innerHTML =DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
 const cards = [...grid.children];
 function applyFilter(){
   const term = q.value.trim().toLowerCase();
@@ -596,6 +616,7 @@ function buildCatalogPkgs(cat: Catalog): CatalogPkg[] {
     id: r.id, file_name: r.file_name, file_path: r.file_path,
     guids: JSON.parse(r.guids_json) as string[],
     requires_liltoon: r.requires_liltoon, requires_poiyomi: r.requires_poiyomi, has_locked: r.has_locked,
+    category: r.category,
   }));
 }
 

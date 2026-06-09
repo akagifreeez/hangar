@@ -1,6 +1,7 @@
 // カタログDB（Node内蔵 node:sqlite）。製品スキーマの最小サブセット。
 import { DatabaseSync } from 'node:sqlite';
 import { guidSetHash } from './sig.js';
+import { classifyPackage } from './classify.js';
 import type { ParsedPackage } from './unitypackage.js';
 
 export interface PackageRow {
@@ -19,6 +20,7 @@ export interface PackageRow {
   requires_poiyomi: number;
   has_locked: number;
   mtime_ms: number;
+  category: string;          // 'tool' | 'model' | 'animation' | 'material' | 'other'
 }
 
 // 同一内容(GUID集合一致)のパッケージを1商品に束ねた単位
@@ -30,6 +32,7 @@ export interface Product {
   projects: { name: string; path: string; pct: number }[];
   sig: string;              // 内容署名(GUID集合のmd5)。3Dレンダ成果物の安定キー
   previewHashes: string[];  // この商品の各物理コピーの preview_dir basename。旧式レンダ(パスhashキー)の後方互換探索用
+  category: string;         // 'tool' | 'model' | 'animation' | 'material' | 'other'
 }
 
 export class Catalog {
@@ -57,6 +60,7 @@ export class Catalog {
         requires_poiyomi INTEGER NOT NULL DEFAULT 0,
         has_locked       INTEGER NOT NULL DEFAULT 0,
         mtime_ms      INTEGER NOT NULL DEFAULT 0,
+        category      TEXT NOT NULL DEFAULT 'other',
         scanned_at    INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS files (
@@ -100,9 +104,26 @@ export class Catalog {
       ['requires_poiyomi', 'INTEGER NOT NULL DEFAULT 0'],
       ['has_locked', 'INTEGER NOT NULL DEFAULT 0'],
       ['mtime_ms', 'INTEGER NOT NULL DEFAULT 0'],
+      ['category', "TEXT NOT NULL DEFAULT 'other'"],
     ];
+    let categoryAdded = false;
     for (const [col, type] of migrations) {
-      try { this.db.exec(`ALTER TABLE packages ADD COLUMN ${col} ${type}`); } catch { /* 既にある */ }
+      try { this.db.exec(`ALTER TABLE packages ADD COLUMN ${col} ${type}`); if (col === 'category') categoryAdded = true; } catch { /* 既にある */ }
+    }
+    // 旧DBに category 列を今回追加した場合、既存行を kind_breakdown から再分類してバックフィル(再scan不要)。
+    // asmdef/Editor は kind_breakdown に無いため 0 扱い(script/shader主体のツールは捕捉、asmdef専用は次回scanで是正)。
+    if (categoryAdded) {
+      const rows = this.db.prepare('SELECT id, kind_breakdown, file_count FROM packages').all() as unknown as { id: number; kind_breakdown: string; file_count: number }[];
+      const upd = this.db.prepare('UPDATE packages SET category = ? WHERE id = ?');
+      for (const r of rows) {
+        let k: Record<string, number> = {};
+        try { k = JSON.parse(r.kind_breakdown); } catch { /* 壊れ→other */ }
+        const cat = classifyPackage({
+          script: k.script ?? 0, shader: k.shader ?? 0, model: (k.model ?? 0) + (k.vrm ?? 0), prefab: k.prefab ?? 0,
+          texture: k.texture ?? 0, material: k.material ?? 0, anim: k.anim ?? 0, asmdef: 0, editor: 0, fileCount: r.file_count,
+        });
+        upd.run(cat, r.id);
+      }
     }
   }
 
@@ -114,11 +135,11 @@ export class Catalog {
 
       const previewPct = pkg.fileCount ? Math.round((1000 * pkg.previewCount) / pkg.fileCount) / 10 : 0;
       const info = this.db.prepare(
-        `INSERT INTO packages (file_path, file_name, size_bytes, file_count, preview_count, preview_pct, kind_breakdown, guids_json, cover_guid, preview_dir, requires_liltoon, requires_poiyomi, has_locked, mtime_ms, scanned_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO packages (file_path, file_name, size_bytes, file_count, preview_count, preview_pct, kind_breakdown, guids_json, cover_guid, preview_dir, requires_liltoon, requires_poiyomi, has_locked, mtime_ms, category, scanned_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(pkg.file, pkg.fileName, pkg.sizeBytes, pkg.fileCount, pkg.previewCount, previewPct,
             JSON.stringify(pkg.kindBreakdown), JSON.stringify(pkg.guids), pkg.coverGuid ?? null, pkg.previewDir ?? null,
-            pkg.shaders.liltoon ? 1 : 0, pkg.shaders.poiyomi ? 1 : 0, pkg.shaders.locked ? 1 : 0, pkg.mtimeMs, Date.now());
+            pkg.shaders.liltoon ? 1 : 0, pkg.shaders.poiyomi ? 1 : 0, pkg.shaders.locked ? 1 : 0, pkg.mtimeMs, pkg.category, Date.now());
 
       const pid = Number(info.lastInsertRowid);
       const ins = this.db.prepare(
@@ -242,7 +263,7 @@ export class Catalog {
       }
       // 各物理コピーの preview_dir basename（旧式レンダはこのいずれかのキーで保存されている）
       const previewHashes = g.map(r => (r.preview_dir ? r.preview_dir.split(/[\\/]/).filter(Boolean).pop() ?? '' : '')).filter(Boolean);
-      products.push({ rep, copies: g.map(r => r.file_path), copyCount: g.length, wastedBytes: wasted, projects: [...projMap.values()].sort((a, b) => b.pct - a.pct), sig, previewHashes });
+      products.push({ rep, copies: g.map(r => r.file_path), copyCount: g.length, wastedBytes: wasted, projects: [...projMap.values()].sort((a, b) => b.pct - a.pct), sig, previewHashes, category: rep.category ?? 'other' });
     }
     products.sort((a, b) => a.rep.file_name.localeCompare(b.rep.file_name));
     return products;

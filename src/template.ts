@@ -97,7 +97,7 @@ export interface TemplateManifest {
   shareSafe: boolean;
 }
 
-export interface CatalogPkg { id: number; file_name: string; file_path: string; guids: string[]; requires_liltoon: number; requires_poiyomi: number; has_locked: number; }
+export interface CatalogPkg { id: number; file_name: string; file_path: string; guids: string[]; requires_liltoon: number; requires_poiyomi: number; has_locked: number; category?: string; }
 
 export interface SaveResult { manifest: TemplateManifest; outDir: string; copiedBytes: number; purchasedSkipped: number; }
 

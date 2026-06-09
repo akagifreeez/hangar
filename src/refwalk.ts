@@ -52,6 +52,8 @@ export interface DerivativeResult {
  * - allProductGuids: 全カタログ商品GUID(購入物判定)。
  * - guidToProduct: guid → 商品ファイル名(表示用)。
  * 型参照(シェーダ/スクリプト)・組み込み/既知ツールGUIDは依存・派生・未解決いずれにも数えない。
+ * ※パッケージ分類(category=tool)は商品単位で全guidを除外してしまい1個の誤分類で派生を握りつぶす危険があるため
+ *   ここでは使わない。ツール参照の除外は構造的に安全な typeGuids(m_Shader/m_Script)で行う。
  */
 export function buildDerivativeInfo(
   nodes: AuthoredNode[],

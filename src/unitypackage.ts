@@ -5,7 +5,7 @@ import { stat } from 'node:fs/promises';
 import zlib from 'node:zlib';
 import { basename, extname, join } from 'node:path';
 import * as tar from 'tar-stream';
-import { classify, importerOf, type AssetKind } from './classify.js';
+import { classify, classifyPackage, importerOf, type AssetKind, type PackageCategory } from './classify.js';
 
 export interface PackageEntry {
   guid: string;
@@ -35,6 +35,7 @@ export interface ParsedPackage {
   fileCount: number;
   previewCount: number;
   kindBreakdown: Record<string, number>;
+  category: PackageCategory;   // 3Dモデル / ツール / アニメ / マテリアル / その他
   shaders: ShaderReq;       // 必要シェーダ(マテリアル先頭の指紋から判定)
   coverGuid?: string;       // カタログ代表サムネに使うguid
   previewDir?: string;      // preview.png を抽出した先
@@ -142,6 +143,20 @@ export async function parsePackage(file: string, opts: { previewDir?: string } =
 
   const cover = pickCover(entries);
 
+  // パッケージ分類のシグナルを entries から集計（kind別数 + asmdef + Editor配下）。
+  const category = classifyPackage({
+    script: kindBreakdown['script'] ?? 0,
+    shader: kindBreakdown['shader'] ?? 0,
+    model: (kindBreakdown['model'] ?? 0) + (kindBreakdown['vrm'] ?? 0),
+    prefab: kindBreakdown['prefab'] ?? 0,
+    texture: kindBreakdown['texture'] ?? 0,
+    material: kindBreakdown['material'] ?? 0,
+    anim: kindBreakdown['anim'] ?? 0,
+    asmdef: entries.reduce((n, e) => n + (e.ext === '.asmdef' ? 1 : 0), 0),
+    editor: entries.reduce((n, e) => n + (/(^|\/)editor\//i.test(e.pathname) ? 1 : 0), 0),
+    fileCount: entries.length,
+  });
+
   return {
     file,
     fileName: basename(file),
@@ -152,6 +167,7 @@ export async function parsePackage(file: string, opts: { previewDir?: string } =
     fileCount: entries.length,
     previewCount,
     kindBreakdown,
+    category,
     shaders,
     coverGuid: cover?.guid,
     previewDir: opts.previewDir,
