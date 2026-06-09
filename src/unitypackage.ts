@@ -29,6 +29,7 @@ export interface ParsedPackage {
   file: string;
   fileName: string;
   sizeBytes: number;
+  mtimeMs: number;          // 最終更新時刻(ms)。差分スキャンで未変更パッケージを再解析せずスキップするのに使う
   guids: string[];          // 全GUIDフォルダ名（= 各アセットのguid。遡及検出に使う）
   entries: PackageEntry[];
   fileCount: number;
@@ -145,6 +146,7 @@ export async function parsePackage(file: string, opts: { previewDir?: string } =
     file,
     fileName: basename(file),
     sizeBytes: st.size,
+    mtimeMs: Math.round(st.mtimeMs),
     guids: [...groups.keys()],
     entries,
     fileCount: entries.length,

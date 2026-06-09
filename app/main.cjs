@@ -6,6 +6,10 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
+
+// 並列スキャン(gunzip)用のスレッドプール上限。CLIサブプロセスの起動時に渡す(libuvが起動時に読む)。
+const UV_POOL = String(Math.max(4, Math.min(16, os.cpus().length || 4)));
 
 app.setName('Hangar');                                    // userData = %APPDATA%\Hangar に固定
 
@@ -49,7 +53,7 @@ function catalogUrl() { return 'file:///' + CATALOG.replace(/\\/g, '/'); }
 // 戻り値 {code, tail}: 終了コード(0=成功)と末尾ログ行(失敗時の原因表示用)。onLine で全行を観測可。
 function runCli(args, onLine) {
   return new Promise((resolve) => {
-    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
+    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1', UV_THREADPOOL_SIZE: UV_POOL };
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
     let buf = '';
     const tail = [];
@@ -87,7 +91,7 @@ function parseJsonLoose(out) {
 // CLIをJSONモードで実行し最初のJSON値を返す(diff/template/caps 用)。{ok, code, report, tail}。
 function runCliJson(args) {
   return new Promise((resolve) => {
-    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1' };
+    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1', UV_THREADPOOL_SIZE: UV_POOL };
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
     let out = '';
     const err = [];

@@ -1,4 +1,5 @@
 // Hangar v0.1 CLI — scan / list / search / detect / installs / catalog
+import { cpus } from 'node:os';
 import { basename, join, dirname, relative } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,9 @@ import { projectGuids, matchPackages } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
 import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, type CatalogPkg } from './template.js';
 import { renderPackage, findUnity, findLilToon, findPoiyomi } from './render.js';
+
+// 並列スキャン(gunzip=スレッドプール)用にプールを広げる。libuvは初回スレッドプール利用時に読むので、scan前のここで設定。
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = String(Math.max(4, Math.min(16, cpus().length || 4)));
 
 type Proj = { name: string; path: string; pct: number };
 
@@ -32,18 +36,14 @@ async function main(): Promise<void> {
         const dir = args[0];
         if (!dir) return fail('usage: scan <libraryDir>');
         console.log(`scanning ${dir} (recursive, Library等は除外) ...`);
-        let failCount = 0;
-        const res = await scanDir(dir, cat, cacheDir, (i, total, p, file, err) => {
-          const name = basename(file);
-          if (p) console.log(`  [${i}/${total}] ${name}  ${mb(p.sizeBytes)} files:${p.fileCount} prev:${p.fileCount ? Math.round(100 * p.previewCount / p.fileCount) : 0}%`);
-          else {
-            failCount++;
-            const msg = err instanceof Error ? err.message : String(err ?? '');
-            console.log(`  [${i}/${total}] ${name}  ⚠ parse失敗(スキップ): ${msg || '原因不明'}`);
-          }
+        const sum = await scanDir(dir, cat, cacheDir, (e) => {
+          const name = basename(e.file);
+          if (e.status === 'parsed') console.log(`  [${e.i}/${e.total}] ${name}  ${mb(e.pkg.sizeBytes)} files:${e.pkg.fileCount} prev:${e.pkg.fileCount ? Math.round(100 * e.pkg.previewCount / e.pkg.fileCount) : 0}%`);
+          else if (e.status === 'skipped') console.log(`  [${e.i}/${e.total}] ${name}  (未変更スキップ)`);
+          else { const msg = e.err instanceof Error ? e.err.message : String(e.err ?? ''); console.log(`  [${e.i}/${e.total}] ${name}  ⚠ parse失敗(スキップ): ${msg || '原因不明'}`); }
         });
-        if (failCount) console.log(`⚠ ${failCount} 件が解析できませんでした（上の理由を確認）。書込先: ${dbPath} / cache: ${cacheDir}`);
-        console.log(`scanned ${res.length} package(s) into ${dbPath}.`);
+        if (sum.failed) console.log(`⚠ ${sum.failed} 件が解析できませんでした（上の理由を確認）。書込先: ${dbPath} / cache: ${cacheDir}`);
+        console.log(`scanned ${sum.total} package(s) into ${dbPath}. (${sum.parsed} 解析 / ${sum.skipped} 未変更スキップ${sum.failed ? ` / ${sum.failed} 失敗` : ''})`);
         break;
       }
       case 'list': {

@@ -18,6 +18,7 @@ export interface PackageRow {
   requires_liltoon: number;
   requires_poiyomi: number;
   has_locked: number;
+  mtime_ms: number;
 }
 
 // 同一内容(GUID集合一致)のパッケージを1商品に束ねた単位
@@ -38,6 +39,7 @@ export class Catalog {
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS packages (
         id            INTEGER PRIMARY KEY,
@@ -54,6 +56,7 @@ export class Catalog {
         requires_liltoon INTEGER NOT NULL DEFAULT 0,
         requires_poiyomi INTEGER NOT NULL DEFAULT 0,
         has_locked       INTEGER NOT NULL DEFAULT 0,
+        mtime_ms      INTEGER NOT NULL DEFAULT 0,
         scanned_at    INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS files (
@@ -96,6 +99,7 @@ export class Catalog {
       ['requires_liltoon', 'INTEGER NOT NULL DEFAULT 0'],
       ['requires_poiyomi', 'INTEGER NOT NULL DEFAULT 0'],
       ['has_locked', 'INTEGER NOT NULL DEFAULT 0'],
+      ['mtime_ms', 'INTEGER NOT NULL DEFAULT 0'],
     ];
     for (const [col, type] of migrations) {
       try { this.db.exec(`ALTER TABLE packages ADD COLUMN ${col} ${type}`); } catch { /* 既にある */ }
@@ -110,11 +114,11 @@ export class Catalog {
 
       const previewPct = pkg.fileCount ? Math.round((1000 * pkg.previewCount) / pkg.fileCount) / 10 : 0;
       const info = this.db.prepare(
-        `INSERT INTO packages (file_path, file_name, size_bytes, file_count, preview_count, preview_pct, kind_breakdown, guids_json, cover_guid, preview_dir, requires_liltoon, requires_poiyomi, has_locked, scanned_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO packages (file_path, file_name, size_bytes, file_count, preview_count, preview_pct, kind_breakdown, guids_json, cover_guid, preview_dir, requires_liltoon, requires_poiyomi, has_locked, mtime_ms, scanned_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(pkg.file, pkg.fileName, pkg.sizeBytes, pkg.fileCount, pkg.previewCount, previewPct,
             JSON.stringify(pkg.kindBreakdown), JSON.stringify(pkg.guids), pkg.coverGuid ?? null, pkg.previewDir ?? null,
-            pkg.shaders.liltoon ? 1 : 0, pkg.shaders.poiyomi ? 1 : 0, pkg.shaders.locked ? 1 : 0, Date.now());
+            pkg.shaders.liltoon ? 1 : 0, pkg.shaders.poiyomi ? 1 : 0, pkg.shaders.locked ? 1 : 0, pkg.mtimeMs, Date.now());
 
       const pid = Number(info.lastInsertRowid);
       const ins = this.db.prepare(
@@ -134,6 +138,12 @@ export class Catalog {
 
   allPackages(): PackageRow[] {
     return this.db.prepare('SELECT * FROM packages ORDER BY file_name').all() as unknown as PackageRow[];
+  }
+
+  // 差分スキャン用: 登録済みなら size/mtime を返す。スキャン時に未変更なら再解析をスキップする。
+  packageMeta(filePath: string): { size_bytes: number; mtime_ms: number } | undefined {
+    return this.db.prepare('SELECT size_bytes, mtime_ms FROM packages WHERE file_path = ?')
+      .get(filePath) as { size_bytes: number; mtime_ms: number } | undefined;
   }
 
   search(q: string): PackageRow[] {
