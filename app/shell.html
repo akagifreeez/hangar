@@ -293,8 +293,8 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   let DIFF_PKG = '';
   async function openDiff(pkg){
     if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
-    // 対象プロジェクトはDBの登録済み一覧から(configズレ/別データ場所の影響を受けない)
-    const projects = (await window.hangar.listProjects()) || [];
+    // 対象プロジェクトはDB(list-projects)優先・configフォールバックで取得(部分リロードでも死なない)
+    const projects = await getRegisteredProjects();
     if (!projects.length) { showError('対象プロジェクトが未登録です', ['先に「🎯 プロジェクト検出」で Unity プロジェクトを登録してください']); return; }
     DIFF_PKG = pkg;
     $('diffpkg').textContent = pkg.split(/[\\/]/).pop();
@@ -479,10 +479,15 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   function cmpSelected(){
     return [...$('cmpsel').querySelectorAll('select')].map(s => s.value).filter((v, i, a) => v && a.indexOf(v) === i);
   }
+  // 登録済みプロジェクト取得: DB(list-projects)優先、未対応(古い本体/部分リロード)や空ならconfigにフォールバック。例外で死なせない。
+  async function getRegisteredProjects(){
+    try { const r = await window.hangar.listProjects(); if (Array.isArray(r) && r.length) return r; } catch (e) {}
+    try { const cfg = await window.hangar.getConfig(); return ((cfg && cfg.projectDirs) || []).map(p => ({ path: p, name: cmpBase(p) })); } catch (e) {}
+    return [];
+  }
   async function openCmp(){
     if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
-    // config(最後のdetect分)ではなくDBの登録済み一覧を使う(ズレ/別データ場所で未登録扱いになるのを防ぐ)
-    CMP_PROJECTS = (await window.hangar.listProjects()) || [];
+    CMP_PROJECTS = await getRegisteredProjects();
     if (CMP_PROJECTS.length < 2) { showError('比較には登録済みプロジェクトが2つ以上必要です', ['「🎯 プロジェクト検出」で2つ以上のプロジェクト（複数まとめた上位フォルダでもOK）を登録してください。現在の登録数: ' + CMP_PROJECTS.length + ' 件']); return; }
     $('cmpsel').innerHTML = ''; cmpAddSelect(0); cmpAddSelect(1);
     $('cmpbody').innerHTML = '<div class="dinfo">プロジェクトを2つ以上選んで「比較」。「＋追加」で3つ以上、「📊 散らばり」で全体の重複俯瞰。</div>';
