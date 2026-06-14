@@ -195,22 +195,19 @@ ipcMain.handle('diff', (_e, pkg, project) => withJob(async () => {
   const r = await runCliJson(['diff', pkg, '--project', project, '--json']);
   return r.report;   // 失敗時 null（UI 側で原因表示）。直列化で連打/D&Dの多重起動を防ぐ。
 }));
-// プロジェクト横断比較(読み取り専用): compare --json の構造体 {projects, products, tooling} をそのまま返す。
-ipcMain.handle('compare', (_e, projects) => withJob(async () => {
-  return await runCliJson(['compare', ...projects, '--json']);
-}));
+// プロジェクト横断比較(読み取り専用): compare --json の構造体 {projects, products, tooling} を返す。
+// ※ runCliJson は {ok,code,report,tail} を返すので、必ず .report を返す(diff ハンドラと同じ)。
+ipcMain.handle('compare', (_e, projects) => withJob(async () =>
+  (await runCliJson(['compare', ...(Array.isArray(projects) ? projects : []), '--json'])).report));
 // 登録済みプロジェクト一覧(読み取り専用): 比較/diffドロップダウンの権威ソース(configではなくDB)。
-ipcMain.handle('list-projects', () => withJob(async () => {
-  return await runCliJson(['list-projects', '--json']);
-}));
-// 散らばり俯瞰(読み取り専用): sprawl --json の配列をそのまま返す。
-ipcMain.handle('sprawl', () => withJob(async () => {
-  return await runCliJson(['sprawl', '--json']);
-}));
+ipcMain.handle('list-projects', () => withJob(async () =>
+  (await runCliJson(['list-projects', '--json'])).report));
+// 散らばり俯瞰(読み取り専用): sprawl --json の配列を返す。
+ipcMain.handle('sprawl', () => withJob(async () =>
+  (await runCliJson(['sprawl', '--json'])).report));
 // 重複整理プレビュー(読み取り専用・書き出しなし): reclaim --json の要約を返す。
-ipcMain.handle('reclaim-preview', () => withJob(async () => {
-  return await runCliJson(['reclaim', '--json']);
-}));
+ipcMain.handle('reclaim-preview', () => withJob(async () =>
+  (await runCliJson(['reclaim', '--json'])).report));
 // 重複整理プラン書き出し: 指定フォルダに可逆プラン(.ps1)を生成(削除/移動はしない・スクリプトは本人が実行)。
 ipcMain.handle('reclaim-write', (_e, outDir) => withJob(async () => {
   const script = path.join(outDir, 'reclaim_plan.ps1');
