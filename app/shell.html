@@ -509,8 +509,13 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     const paths = cmpSelected();
     if (paths.length < 2) { $('cmpbody').innerHTML = '<div class="orange">違うプロジェクトを2つ以上選んでください。</div>'; return; }
     $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>比較中…</div>';
-    const r = await window.hangar.compare(paths);
-    $('cmpbody').innerHTML = renderCompare(r);
+    try {
+      const r = await window.hangar.compare(paths);
+      if (r === undefined) { $('cmpbody').innerHTML = '<div class="red">比較を実行できませんでした（本体が古い可能性）。Hangarを<b>完全に終了</b>（タスクマネージャーで electron / Hangar を全部終了）してから <b>hangar-gui.cmd</b> で起動し直してください。</div>'; return; }
+      $('cmpbody').innerHTML = renderCompare(r);
+    } catch (e) {
+      $('cmpbody').innerHTML = '<div class="red">比較でエラー（本体が古い可能性）。Hangarを<b>完全に終了</b>してから <b>hangar-gui.cmd</b> で起動し直してください。<br><span class="sub">' + esc(String((e && e.message) || e)) + '</span></div>';
+    }
   };
   $('cmpsprawl').onclick = async () => {
     $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>散らばりを集計中…</div>';
