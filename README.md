@@ -44,9 +44,9 @@ Hangar はこれを全部、Unity を開かずに解決します。
 
 3Dモデル / ツール / アニメ / マテリアル に自動で振り分けてタブで絞り込み。lilToon・Poiyomi・SDK などの**ツールが棚に埋もれません**。
 
-### 🔁 重複検出
+### 🔁 重複検出・整理（🧹）
 
-中身が同じコピーを束ねて、無駄な重複容量を可視化。整理プランは**削除ではなく「隔離フォルダへ移動」する可逆な形**で書き出すだけなので安全です。
+中身が同じコピーを束ねて、無駄な重複容量を可視化。ツールバーの「🛠 ツール → 🔀 プロジェクト比較 → 🧹 重複整理」から、整理プランを書き出せます。プランは**削除ではなく「隔離フォルダへ移動」する可逆な形**（PowerShell スクリプト）なので安全です（実行はあなた・確認後に隔離フォルダを削除して初めて空きます）。
 
 ### 🔀 プロジェクト横断比較 / 散らばり俯瞰
 
@@ -115,6 +115,8 @@ npm run cli -- list                         # 一覧
 npm run cli -- detect [--save] <Unityプロジェクト...>   # 導入逆引き(--saveで記録・上位フォルダ可)
 npm run cli -- compare <ProjA> <ProjB> [..] [--all] [--json] [--html out.html]   # プロジェクト横断比較(共通/Aのみ/Bのみ・版差・移行ギャップ)
 npm run cli -- sprawl [--min N] [--json]                # 散らばり俯瞰(複数プロジェクトに散在する商品)
+npm run cli -- list-projects [--json]                   # 登録済みプロジェクト一覧
+npm run cli -- prune-projects [--json]                  # 不正な登録(不在/Assets無し)を掃除
 npm run cli -- diff <pkg.unitypackage> --project <Unityプロジェクト>   # 取り込み前チェック(--json / --html out.html)
 npm run cli -- save-template <Unityプロジェクト> --out <テンプレ出力先>  # 自作分を保存＋依存購入物をマニフェスト化(購入バイト非同梱)
 npm run cli -- restore-template <テンプレ> --project <まっさらなプロジェクト>  # 復元＋「持ってる/入れ直して」台帳(既定は既存保護・--forceで上書き)
@@ -139,5 +141,5 @@ npm run gui             # Electron GUI（system Node 不要・Electron内蔵Node
 | `refwalk.ts` | 自作物の参照を推移的に辿り、購入物への依存/派生/未識別参照を判定（テンプレの共有安全性） |
 | `template.ts` | 再現テンプレ: 自作分の保存(購入バイト非同梱)・依存マニフェスト化・復元と再インポート台帳 |
 | `render.ts` | 方式A: 抽出 → lilToon/Poiyomi 入り素プロジェクト → Unity バッチで PNG+GLB |
-| `cli.ts` | scan / list / search / detect / compare / sprawl / diff / save-template / restore-template / installs / catalog / dupes / products / reclaim / render / caps / version |
+| `cli.ts` | scan / list / search / detect / compare / sprawl / list-projects / prune-projects / diff / save-template / restore-template / installs / catalog / dupes / products / reclaim / render / caps / version |
 | `app/` | Electron シェル（窓 + フォルダ選択 + D&D。重い処理は dist/cli.js を Electron-as-node で実行） |

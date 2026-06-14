@@ -443,7 +443,10 @@ async function main(): Promise<void> {
         console.log('  diff <pkg> --project <dir>       取り込み前チェック: 何を上書き/足りないシェーダ(--json/--all/--html out.html)');
         console.log('  save-template <projectDir> --out <dir>      改変アバターの自作分を保存＋依存購入物をマニフェスト化(購入バイトは非同梱)');
         console.log('  restore-template <templateDir> --project <dir>  まっさらなプロジェクトへ復元＋「持ってる/入れ直して」台帳（既定は既存保護・上書きは --force）');
-        console.log('  detect [--save] <projectDir...>  導入済みか逆引き（--saveで記録）');
+        console.log('  detect [--save] <projectDir...>  導入済みか逆引き（--saveで記録・上位フォルダ可）');
+        console.log('  compare <projA> <projB> [..]     プロジェクト横断比較(共通/Aのみ/Bのみ・版差・移行ギャップ)(--all/--json/--html)');
+        console.log('  sprawl [--min N]                 散らばり俯瞰(複数プロジェクトに散在する商品)');
+        console.log('  list-projects / prune-projects   登録プロジェクト一覧 / 不正登録(不在・Assets無し)の掃除');
         console.log('  installs                         パッケージ→導入先一覧（重複導入警告）');
         console.log('  catalog [out.html]               カタログ(クリックで詳細: 中身/プレビュー/導入台帳)を生成');
         console.log('  version                          バージョンを表示');
