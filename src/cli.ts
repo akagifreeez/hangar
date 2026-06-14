@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { guidSetHash } from './sig.js';
 import { Catalog, type PackageRow, type Product } from './db.js';
 import { scanDir } from './scan.js';
-import { projectGuids, matchPackages } from './detect.js';
+import { projectGuids, matchPackages, expandProjectRoots } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
 import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, type CatalogPkg } from './template.js';
 import { renderPackage, findUnity, findLilToon, findPoiyomi } from './render.js';
@@ -62,8 +62,12 @@ async function main(): Promise<void> {
       }
       case 'detect': {
         const save = args.includes('--save');
-        const projects = args.filter(a => a !== '--save');
-        if (!projects.length) return fail('usage: detect [--save] <projectDir> [projectDir...]');
+        const selected = args.filter(a => a !== '--save');
+        if (!selected.length) return fail('usage: detect [--save] <projectDir> [projectDir...]');
+        // 上位フォルダ(複数プロジェクトをまとめた親)を選んでも、配下の各プロジェクトへ自動展開
+        const projects = await expandProjectRoots(selected);
+        if (projects.length !== selected.length || projects.some((p, i) => p !== selected[i]))
+          console.log(`(選択フォルダから ${projects.length} プロジェクトを検出)`);
         const pkgs = cat.allPackageGuids();
         if (!pkgs.length) return fail('catalog empty — run scan first');
         for (const proj of projects) {

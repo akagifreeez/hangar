@@ -150,14 +150,16 @@ ipcMain.handle('scan', (_e, folder) => withJob(async () => {
 }));
 // 検出: .meta総数と導入済み商品数を集計して返す(metaTotal=0 は「Assets違い」を疑える)。失敗時は regen しない(有効カタログ保護)。
 ipcMain.handle('detect', (_e, folders) => withJob(async () => {
-  remember('projectDirs', folders);
-  let metaTotal = 0, installed = 0;
+  let metaTotal = 0, installed = 0; const roots = [];
   const { code, tail } = await runCli(['detect', '--save', ...folders], (l) => {
     const m = l.match(/\.meta:(\d+)/); if (m) metaTotal += +m[1];
     if (/INSTALLED/.test(l)) installed++;
+    const rm = l.match(/^=== (.+)$/); if (rm) roots.push(rm[1].trim());   // CLIが展開した実プロジェクトのルート
   });
+  // 上位フォルダを選んでも、実際に検出された各プロジェクトのルートを記憶する(上位フォルダは保存しない)
+  remember('projectDirs', roots.length ? roots : folders);
   if (code === 0) await regen();
-  return { ok: code === 0, code, metaTotal, installed, tail };
+  return { ok: code === 0, code, metaTotal, installed, projects: roots.length, tail };
 }));
 ipcMain.handle('regen', () => withJob(async () => { await regen(); return true; }));
 ipcMain.handle('get-config', () => loadConfig());

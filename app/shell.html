@@ -189,13 +189,13 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   $('detect').onclick = async () => {
     $('detect').classList.remove('nudge');
     if (BUSY) return;
-    const f = await window.hangar.pickFolder({ multi: true, title: 'Unityプロジェクトのフォルダ(Assetsを含む)を選択' }); if (!f.length) return;
+    const f = await window.hangar.pickFolder({ multi: true, title: 'Unityプロジェクト、または複数プロジェクトをまとめた上位フォルダを選択(Assets自動検出)' }); if (!f.length) return;
     setBusy(true, 'プロジェクト検出中…'); clearError();
     try {
       const r = await window.hangar.detect(f);
       if (!r.ok) showError('プロジェクト検出に失敗しました', r.tail);
-      else if (r.metaTotal === 0) { showError('.meta が見つかりませんでした', ['Unityプロジェクトのルート（Assets を含むフォルダ）を選んでください']); setStatus('検出: .meta 0件'); }
-      else setStatus('検出完了: 導入済み ' + r.installed + ' 商品');
+      else if (r.metaTotal === 0) { showError('Unityプロジェクトが見つかりませんでした', ['Assets を含むプロジェクトフォルダ、またはそれらをまとめた上位フォルダを選んでください']); setStatus('検出: 0件'); }
+      else setStatus('検出完了: ' + (r.projects || 1) + ' プロジェクト・導入 ' + r.installed + ' 商品');
     } finally { setBusy(false); }
   };
   $('rescan').onclick = async () => {

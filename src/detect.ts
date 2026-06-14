@@ -64,6 +64,33 @@ export async function projectGuids(projectRoot: string): Promise<{ guids: Set<st
   return { guids: new Set(idx.guidToPath.keys()), metaCount: idx.metaCount };
 }
 
+// 選んだフォルダが「Assetsを含むプロジェクト直下」でなければ、配下を深さ maxDepth まで降りて
+// Assetsを持つフォルダ(=各Unityプロジェクト)へ自動展開する。プロジェクト直下では中へ降りない。
+// 例: …\ALCOM\Projects（直下にAssetsなし）を選ぶと、その下の各プロジェクトを個別に拾う。
+export async function expandProjectRoots(folders: string[], maxDepth = 2): Promise<string[]> {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (p: string) => { if (!seen.has(p)) { seen.add(p); out.push(p); } };
+  const scan = async (dir: string, depth: number): Promise<boolean> => {
+    if (existsSync(join(dir, 'Assets'))) { add(dir); return true; }   // ここがプロジェクト→採用し中へは降りない
+    if (depth <= 0) return false;
+    let ents;
+    try { ents = await readdir(dir, { withFileTypes: true }); } catch { return false; }
+    let found = false;
+    for (const e of ents) {
+      if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'Library' && e.name !== 'Logs') {
+        if (await scan(join(dir, e.name), depth - 1)) found = true;
+      }
+    }
+    return found;
+  };
+  for (const f of folders) {
+    const ok = await scan(f, maxDepth);
+    if (!ok) add(f);   // 何も見つからなければ元のまま(従来の .meta 0 エラーで案内)
+  }
+  return out;
+}
+
 async function walk(dir: string, fn: (file: string) => Promise<void>): Promise<void> {
   let ents;
   try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
