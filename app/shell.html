@@ -54,6 +54,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   <button id="scan" title="ライブラリ(BOOTH等の保存先)をスキャン　(Ctrl+O)">📁 ライブラリをスキャン</button>
   <button id="detect" class="sec">🎯 プロジェクト検出</button>
   <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック　(Ctrl+D)">📦 取り込み前チェック</button>
+  <button id="helpbtn" class="sec" title="はじめての方へ・用語のミニ辞典">❓ ヘルプ</button>
   <button id="toolsbtn" class="sec" title="詳しい人向けツール（再スキャン・テンプレ・プロジェクト比較）">🛠 ツール ▾</button>
   <span id="toolsgrp" style="display:none">
     <span class="divider"></span>
@@ -76,6 +77,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   <p style="color:#6a6a72;font-size:12px">例: <b>…\Downloads</b> や BOOTH 保存先フォルダを選ぶと、中の .unitypackage を再帰的に解析します（数分かかることがあります）。</p>
   <div class="dragnote">💡 ボタンを押さなくてもOK — <b>.unitypackage</b> や保存フォルダを、この画面に<b>ドラッグ&ドロップ</b>するだけ（パッケージ＝取り込み前チェック／フォルダ＝スキャン）。</div>
   <div class="khint">⌨ <span class="kbd">Ctrl</span>+<span class="kbd">O</span> スキャン　<span class="kbd">Ctrl</span>+<span class="kbd">D</span> 取り込み前チェック　<span class="kbd">F5</span> 再スキャン　<span class="kbd">Esc</span> 閉じる</div>
+  <button id="helpbtn2" class="sec" style="margin-top:2px">❓ はじめての方へ・用語の説明</button>
 </div>
 <iframe id="cat" style="display:none"></iframe>
 
@@ -115,6 +117,32 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       <button id="cmpclose" class="sec">閉じる</button>
     </div>
     <div id="cmpbody" class="ovbody"></div>
+  </div>
+</div>
+
+<!-- はじめての方へ / 用語集 -->
+<div id="helpov" class="ov">
+  <div class="ovcard">
+    <div class="ovhead">
+      <b>🐣 はじめての方へ — Hangar の使い方</b>
+      <button id="helpclose" class="sec" style="margin-left:auto">閉じる</button>
+    </div>
+    <div class="ovbody" style="line-height:1.8">
+      <p style="margin:0 0 10px">Hangar は、BOOTH などで買った VRChat の <span class="kbd">.unitypackage</span> を <b>Unity で開かずに</b>整理するツールです。やれることは大きく <b>3つ</b>:</p>
+      <div class="dsec"><h4 class="green">① 📁 棚卸し（買ったものを一覧に）</h4><div class="dinfo">保存フォルダを「📁 スキャン」すると、買った商品がサムネ一覧に。<b>「どれ買ったっけ／二重に買ってない?」</b>が一目で分かります。</div></div>
+      <div class="dsec"><h4 class="purple">② 📦 ピンク化の事故防止</h4><div class="dinfo">新しい衣装を入れる<b>前</b>に「📦 取り込み前チェック」へドラッグ。既存と衝突して<b>“まっピンク”</b>になる事故を先に教えます。</div></div>
+      <div class="dsec"><h4 class="orange">③ 🎯 導入の逆引き</h4><div class="dinfo">「🎯 プロジェクト検出」で、<b>どの商品をどの Unity プロジェクトに入れたか</b>を自動で突き合わせ。複数まとめた上位フォルダもOK。</div></div>
+      <div class="duncheck" style="margin-top:14px">
+        <b>📖 用語ミニ辞典</b><br>
+        ・<b>.unitypackage</b> … BOOTH等で買うアバター/衣装/小物の配布ファイル。Unityに取り込んで使う。<br>
+        ・<b>プロジェクト</b> … Unityでアバターを組み立てる作業フォルダ（中に <span class="kbd">Assets</span> がある）。<br>
+        ・<b>ピンク化</b> … 必要なシェーダが無い/壊れると、アバターが真っピンクで表示される事故。<br>
+        ・<b>シェーダ</b> … 見た目（質感・色）を描く仕組み。VRChatの定番が lilToon と Poiyomi。<br>
+        ・<b>lilToon / Poiyomi</b> … 定番のアバター用シェーダ。版が混ざる/欠けるとピンク化の原因に。<br>
+        ・<b>GUID</b> … ファイル1つ1つに付く固有番号。Hangarはこれを突き合わせて「どの商品がどこに入ったか」を判定。
+      </div>
+      <p class="dinfo" style="margin-top:12px">すべて<b>ローカル・読み取り専用</b>。購入物を書き換えたり外部送信することはありません。詳しい人向けの機能（テンプレ・プロジェクト比較）は「🛠 ツール」にあります。</p>
+    </div>
   </div>
 </div>
 
@@ -537,7 +565,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   }
 
   // 背景クリックでモーダルを閉じる(カード内のクリック/ドラッグは無視するため mousedown の発生元で判定)
-  for (const ovId of ['diffov','tmplov','cmpov']) {
+  for (const ovId of ['diffov','tmplov','cmpov','helpov']) {
     $(ovId).addEventListener('mousedown', (e) => { if (e.target === $(ovId)) $(ovId).style.display = 'none'; });
   }
 
@@ -547,11 +575,12 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       if ($('diffov').style.display === 'flex') { $('diffov').style.display = 'none'; return; }
       if ($('tmplov').style.display === 'flex') { $('tmplov').style.display = 'none'; return; }
       if ($('cmpov').style.display === 'flex') { $('cmpov').style.display = 'none'; return; }
+      if ($('helpov').style.display === 'flex') { $('helpov').style.display = 'none'; return; }
       if ($('err').style.display === 'block') { clearError(); return; }
       return;
     }
     // モーダル表示中はEsc以外のショートカットを無効化(背後の操作を防ぐ)
-    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex' || $('cmpov').style.display === 'flex') return;
+    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex' || $('cmpov').style.display === 'flex' || $('helpov').style.display === 'flex') return;
     // 入力欄にフォーカス中はショートカット無効
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -559,6 +588,14 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); $('diffbtn').onclick(); return; }
     if (e.key === 'F5') { e.preventDefault(); $('rescan').onclick(); return; }
   });
+
+  // はじめての方へ / 用語集
+  const openHelp = () => { $('helpov').style.display = 'flex'; };
+  $('helpbtn').onclick = openHelp;
+  $('helpbtn2').onclick = openHelp;
+  $('helpclose').onclick = () => { $('helpov').style.display = 'none'; };
+  // 初回起動時に一度だけ自動表示(以後は ❓ ヘルプから)
+  try { if (!localStorage.getItem('hangar_help_seen')) { openHelp(); localStorage.setItem('hangar_help_seen', '1'); } } catch {}
 
   // 段階的開示: 上級ツール(再スキャン/テンプレ/比較)は「🛠 ツール」で開閉。初回は畳んでおく。
   $('toolsbtn').onclick = () => {
