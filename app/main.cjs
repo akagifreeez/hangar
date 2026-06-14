@@ -199,6 +199,10 @@ ipcMain.handle('diff', (_e, pkg, project) => withJob(async () => {
 ipcMain.handle('compare', (_e, projects) => withJob(async () => {
   return await runCliJson(['compare', ...projects, '--json']);
 }));
+// 登録済みプロジェクト一覧(読み取り専用): 比較/diffドロップダウンの権威ソース(configではなくDB)。
+ipcMain.handle('list-projects', () => withJob(async () => {
+  return await runCliJson(['list-projects', '--json']);
+}));
 // 散らばり俯瞰(読み取り専用): sprawl --json の配列をそのまま返す。
 ipcMain.handle('sprawl', () => withJob(async () => {
   return await runCliJson(['sprawl', '--json']);

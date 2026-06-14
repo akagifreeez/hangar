@@ -293,12 +293,12 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   let DIFF_PKG = '';
   async function openDiff(pkg){
     if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
-    const cfg = await window.hangar.getConfig();
-    const projects = (cfg && cfg.projectDirs) || [];
+    // 対象プロジェクトはDBの登録済み一覧から(configズレ/別データ場所の影響を受けない)
+    const projects = (await window.hangar.listProjects()) || [];
     if (!projects.length) { showError('対象プロジェクトが未登録です', ['先に「🎯 プロジェクト検出」で Unity プロジェクトを登録してください']); return; }
     DIFF_PKG = pkg;
     $('diffpkg').textContent = pkg.split(/[\\/]/).pop();
-    $('diffproj').innerHTML = projects.map(p => '<option value="'+esc(p)+'">'+esc(p)+'</option>').join('');
+    $('diffproj').innerHTML = projects.map(p => '<option value="'+esc(p.path)+'">'+esc(p.name || p.path)+'</option>').join('');
     $('diffov').style.display = 'flex';
     runDiff();
   }
@@ -467,12 +467,12 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   });
 
   // ---- プロジェクト横断比較(compare) / 散らばり(sprawl) ----
-  let CMP_PROJECTS = [];
-  const cmpBase = p => (p.split(/[\\/]/).filter(Boolean).pop() || p);
+  let CMP_PROJECTS = [];   // [{path,name}] DBの登録済み(detect --save済み)プロジェクト＝比較の権威ソース
+  const cmpBase = p => (String(p).split(/[\\/]/).filter(Boolean).pop() || p);
   function cmpAddSelect(sel){
     if (!CMP_PROJECTS.length) return;
     const s = document.createElement('select');
-    s.innerHTML = CMP_PROJECTS.map(p => '<option value="'+esc(p)+'">'+esc(cmpBase(p))+'</option>').join('');
+    s.innerHTML = CMP_PROJECTS.map(p => '<option value="'+esc(p.path)+'">'+esc(p.name || cmpBase(p.path))+'</option>').join('');
     s.selectedIndex = Math.min(sel, CMP_PROJECTS.length - 1);
     $('cmpsel').appendChild(s);
   }
@@ -481,9 +481,9 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   }
   async function openCmp(){
     if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
-    const cfg = await window.hangar.getConfig();
-    CMP_PROJECTS = (cfg && cfg.projectDirs) || [];
-    if (CMP_PROJECTS.length < 2) { showError('比較には2つ以上のプロジェクトが必要です', ['先に「🎯 プロジェクト検出」で2つ以上のプロジェクトを登録してください']); return; }
+    // config(最後のdetect分)ではなくDBの登録済み一覧を使う(ズレ/別データ場所で未登録扱いになるのを防ぐ)
+    CMP_PROJECTS = (await window.hangar.listProjects()) || [];
+    if (CMP_PROJECTS.length < 2) { showError('比較には登録済みプロジェクトが2つ以上必要です', ['「🎯 プロジェクト検出」で2つ以上のプロジェクト（複数まとめた上位フォルダでもOK）を登録してください。現在の登録数: ' + CMP_PROJECTS.length + ' 件']); return; }
     $('cmpsel').innerHTML = ''; cmpAddSelect(0); cmpAddSelect(1);
     $('cmpbody').innerHTML = '<div class="dinfo">プロジェクトを2つ以上選んで「比較」。「＋追加」で3つ以上、「📊 散らばり」で全体の重複俯瞰。</div>';
     $('cmpov').style.display = 'flex';

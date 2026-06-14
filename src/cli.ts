@@ -86,6 +86,14 @@ async function main(): Promise<void> {
         if (save) console.log('\n(導入記録を保存しました — 確認: installs)');
         break;
       }
+      case 'list-projects': {
+        // 登録済み(detect --save 済み)Unityプロジェクトの一覧。GUIの比較/diffドロップダウンの権威ソース。
+        const json = args.includes('--json');
+        const projs = cat.allProjects().map(p => ({ path: p.path, name: p.name }));
+        if (json) { console.log(JSON.stringify(projs)); break; }
+        for (const p of projs) console.log(`  ${p.name}\t${p.path}`);
+        break;
+      }
       case 'compare': {
         // プロジェクト横断比較: 登録済みプロジェクトの導入商品を突き合わせ(共通/Aのみ/Bのみ)。読み取り専用・.meta再走査なし。
         const json = args.includes('--json');

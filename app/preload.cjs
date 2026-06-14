@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('hangar', {
   pickFile: () => ipcRenderer.invoke('pick-file'),
   diff: (pkg, project) => ipcRenderer.invoke('diff', pkg, project),
   compare: (projects) => ipcRenderer.invoke('compare', projects),
+  listProjects: () => ipcRenderer.invoke('list-projects'),
   sprawl: () => ipcRenderer.invoke('sprawl'),
   reclaimPreview: () => ipcRenderer.invoke('reclaim-preview'),
   reclaimWrite: (outDir) => ipcRenderer.invoke('reclaim-write', outDir),
