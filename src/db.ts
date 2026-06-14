@@ -216,6 +216,11 @@ export class Catalog {
     this.db.prepare('DELETE FROM install_records WHERE project_id = ?').run(projectId);
   }
 
+  // 不正/陳腐化した登録を削除(install_records は ON DELETE CASCADE で一緒に消える)。
+  removeProject(id: number): void {
+    this.db.prepare('DELETE FROM unity_projects WHERE id = ?').run(id);
+  }
+
   recordInstall(packageId: number, projectId: number, matched: number, total: number, pct: number): void {
     this.db.prepare(
       `INSERT INTO install_records (package_id, project_id, matched, total, pct, detected_at)

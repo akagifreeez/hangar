@@ -94,6 +94,21 @@ async function main(): Promise<void> {
         for (const p of projs) console.log(`  ${p.name}\t${p.path}`);
         break;
       }
+      case 'prune-projects': {
+        // 不正な登録を掃除: フォルダが存在しない / Assets を持たない(=実プロジェクトでない親フォルダ等)を削除。
+        const json = args.includes('--json');
+        const removed: { id: number; name: string; path: string; reason: string }[] = [];
+        for (const p of cat.allProjects()) {
+          const exists = existsSync(p.path);
+          const hasAssets = exists && existsSync(join(p.path, 'Assets'));
+          if (!exists || !hasAssets) { cat.removeProject(p.id); removed.push({ id: p.id, name: p.name, path: p.path, reason: !exists ? 'not-found' : 'no-assets' }); }
+        }
+        const remaining = cat.allProjects().length;
+        if (json) { console.log(JSON.stringify({ removed, remaining })); break; }
+        for (const r of removed) console.log(`  削除: ${r.name}  [${r.reason}]  ${r.path}`);
+        console.log(`\n不正なプロジェクト登録 ${removed.length} 件を削除（残り ${remaining} 件）`);
+        break;
+      }
       case 'compare': {
         // プロジェクト横断比較: 登録済みプロジェクトの導入商品を突き合わせ(共通/Aのみ/Bのみ)。読み取り専用・.meta再走査なし。
         const json = args.includes('--json');
