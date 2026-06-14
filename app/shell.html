@@ -58,6 +58,8 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック　(Ctrl+D)">📦 取り込み前チェック</button>
   <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
   <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
+  <span class="divider"></span>
+  <button id="cmpbtn" class="sec" title="登録済みプロジェクトを2つ選んで導入商品を突き合わせ(共通/Aのみ/Bのみ・版違い・要シェーダ)">🔀 プロジェクト比較</button>
   <span class="tag">VRChat非公式・ローカル限定</span>
   <span id="status">準備完了</span>
 </div>
@@ -99,6 +101,21 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   </div>
 </div>
 
+<!-- プロジェクト横断比較(compare) -->
+<div id="cmpov" class="ov">
+  <div class="ovcard">
+    <div class="ovhead">
+      <b>🔀 プロジェクト比較</b>
+      <select id="cmpA"></select>
+      <span style="color:#8a8a92">⇔</span>
+      <select id="cmpB"></select>
+      <button id="cmprun">比較</button>
+      <button id="cmpclose" class="sec">閉じる</button>
+    </div>
+    <div id="cmpbody" class="ovbody"></div>
+  </div>
+</div>
+
 <div id="err"></div>
 
 <script>
@@ -110,7 +127,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   let LAST_RESTORE = null;
   let pendingOpenSig = null;   // 3D生成完了→カタログ再読込時に、その商品の詳細を自動で開く(#open=sig)
 
-  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl'];
+  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl','cmpbtn'];
   let scanFails = 0;
   function resetProg(){ scanFails = 0; $('progbar').style.width = '0'; $('progtxt').textContent = ''; $('prog').style.display = 'none'; }
   function setProg(done, total, label){
@@ -412,8 +429,58 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     else showError('ドロップできない種類です', ['フォルダ、または .unitypackage をドロップしてください（' + (target.split(/[\\/]/).pop()) + ' はスキャンできません）']);
   });
 
+  // ---- プロジェクト横断比較(compare) ----
+  async function openCmp(){
+    if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
+    const cfg = await window.hangar.getConfig();
+    const projects = (cfg && cfg.projectDirs) || [];
+    if (projects.length < 2) { showError('比較には2つ以上のプロジェクトが必要です', ['先に「🎯 プロジェクト検出」で2つ以上のプロジェクトを登録してください']); return; }
+    const base = p => (p.split(/[\\/]/).filter(Boolean).pop() || p);
+    const opts = projects.map(p => '<option value="'+esc(p)+'">'+esc(base(p))+'</option>').join('');
+    $('cmpA').innerHTML = opts; $('cmpB').innerHTML = opts; $('cmpB').selectedIndex = Math.min(1, projects.length - 1);
+    $('cmpbody').innerHTML = '<div class="dinfo">A と B を選んで「比較」を押してください。</div>';
+    $('cmpov').style.display = 'flex';
+  }
+  $('cmpbtn').onclick = openCmp;
+  $('cmpclose').onclick = () => { $('cmpov').style.display = 'none'; };
+  $('cmprun').onclick = async () => {
+    const a = $('cmpA').value, b = $('cmpB').value;
+    if (!a || !b || a === b) { $('cmpbody').innerHTML = '<div class="orange">違うプロジェクトを2つ選んでください。</div>'; return; }
+    $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>比較中…</div>';
+    const r = await window.hangar.compare([a, b]);
+    $('cmpbody').innerHTML = renderCompare(r);
+  };
+  function renderCompare(r){
+    if (!r) return '<div class="red">比較に失敗しました（対象が detect --save 済みか確認してください）。</div>';
+    const reg = (r.projects||[]).filter(p=>p.registered);
+    const unreg = (r.projects||[]).filter(p=>!p.registered);
+    let h = '';
+    if (unreg.length) h += '<div class="duncheck">⚠ 未登録のため比較対象外: '+unreg.map(p=>esc(p.name)).join(' , ')+'（先に 🎯 プロジェクト検出）</div>';
+    if (reg.length < 2) return h + '<div class="dinfo">登録済みプロジェクトが2つ以上必要です。</div>';
+    const A = reg[0], B = reg[1];
+    const has = (p, path) => p.perProject[path];
+    const pink = p => (p.requiresLil||p.requiresPoi) ? ' <span class="purple">〔要'+[p.requiresLil?'lilToon':'',p.requiresPoi?'Poiyomi':''].filter(Boolean).join('+')+'〕</span>' : '';
+    const prods = r.products||[];
+    const inA = p=>has(p,A.path), inB = p=>has(p,B.path);
+    const common = prods.filter(p=>inA(p)&&inB(p));
+    const oAraw = prods.filter(p=>inA(p)&&!inB(p));
+    const oBraw = prods.filter(p=>inB(p)&&!inA(p));
+    const aByName = new Map(oAraw.map(p=>[p.fileName,p]));
+    const verNames = new Set(oBraw.filter(p=>aByName.has(p.fileName)).map(p=>p.fileName));
+    const oA = oAraw.filter(p=>!verNames.has(p.fileName));
+    const oB = oBraw.filter(p=>!verNames.has(p.fileName));
+    const list = arr => arr.length ? arr.map(p=>'<div class="dconf">'+esc(p.fileName)+pink(p)+'</div>').join('') : '<div class="dinfo">なし</div>';
+    h += '<div class="dinfo">A = <b>'+esc(A.name)+'</b> ／ B = <b>'+esc(B.name)+'</b></div>';
+    h += '<div class="dsec"><h4 class="green">● 共通 ('+common.length+')</h4>' +
+      (common.length ? common.map(p=>{const a=Math.round(inA(p).pct),b=Math.round(inB(p).pct);const note=Math.abs(a-b)>=10?'<span class="orange"> ⚠ '+(a>b?'B':'A')+' は一部だけ('+(a>b?b:a)+'%)</span>':'';return '<div class="dconf">'+esc(p.fileName)+'<span class="sub">A'+a+'% / B'+b+'%'+note+'</span></div>';}).join('') : '<div class="dinfo">なし</div>') + '</div>';
+    h += '<div class="dsec"><h4 class="orange">◀ A のみ ('+oA.length+') ＝B へ移すなら追加導入</h4>'+list(oA)+'</div>';
+    h += '<div class="dsec"><h4 class="orange">▶ B のみ ('+oB.length+')</h4>'+list(oB)+'</div>';
+    if (verNames.size) h += '<div class="dsec"><h4 class="red">⚠ 版違いの可能性 ('+verNames.size+') ＝同名だが中身が異なる</h4>'+[...verNames].map(n=>'<div class="dconf">'+esc(n)+'<span class="sub">A と B で別の版</span></div>').join('')+'</div>';
+    return h;
+  }
+
   // 背景クリックでモーダルを閉じる(カード内のクリック/ドラッグは無視するため mousedown の発生元で判定)
-  for (const ovId of ['diffov','tmplov']) {
+  for (const ovId of ['diffov','tmplov','cmpov']) {
     $(ovId).addEventListener('mousedown', (e) => { if (e.target === $(ovId)) $(ovId).style.display = 'none'; });
   }
 
@@ -422,11 +489,12 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     if (e.key === 'Escape') {
       if ($('diffov').style.display === 'flex') { $('diffov').style.display = 'none'; return; }
       if ($('tmplov').style.display === 'flex') { $('tmplov').style.display = 'none'; return; }
+      if ($('cmpov').style.display === 'flex') { $('cmpov').style.display = 'none'; return; }
       if ($('err').style.display === 'block') { clearError(); return; }
       return;
     }
     // モーダル表示中はEsc以外のショートカットを無効化(背後の操作を防ぐ)
-    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex') return;
+    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex' || $('cmpov').style.display === 'flex') return;
     // 入力欄にフォーカス中はショートカット無効
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;

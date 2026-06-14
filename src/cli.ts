@@ -4,7 +4,7 @@ import { basename, join, dirname, relative } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { guidSetHash } from './sig.js';
-import { Catalog, type PackageRow, type Product } from './db.js';
+import { Catalog, type PackageRow, type Product, type CompareProduct } from './db.js';
 import { scanDir } from './scan.js';
 import { projectGuids, matchPackages, expandProjectRoots } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
@@ -84,6 +84,18 @@ async function main(): Promise<void> {
           }
         }
         if (save) console.log('\n(導入記録を保存しました — 確認: installs)');
+        break;
+      }
+      case 'compare': {
+        // プロジェクト横断比較: 登録済みプロジェクトの導入商品を突き合わせ(共通/Aのみ/Bのみ)。読み取り専用・.meta再走査なし。
+        const json = args.includes('--json');
+        const all = args.includes('--all');
+        let paths = args.filter(a => !a.startsWith('--'));
+        if (all || paths.length === 0) paths = cat.allProjects().map(p => p.path);
+        if (paths.length < 2) return fail('usage: compare <projA> <projB> [projC...] [--all] [--json]  （要: detect --save 済みプロジェクト2つ以上）');
+        const result = cat.compareProjects(paths);
+        if (json) { console.log(JSON.stringify(result)); break; }
+        console.log(formatCompareText(result));
         break;
       }
       case 'diff': {
@@ -433,6 +445,68 @@ function shaderBadges(r: PackageRow): string {
 // パッケージ種別バッジ(3Dモデル/ツール/アニメ/マテリアル)。色は CSS .cat-<category>。
 function catBadge(category: string): string {
   return `<span class="catb cat-${esc(category)}">${esc(categoryLabel(category as never))}</span>`;
+}
+
+type CompareResult = { projects: { path: string; name: string; registered: boolean }[]; products: CompareProduct[] };
+
+function formatCompareText(r: CompareResult): string {
+  const L: string[] = [];
+  const unreg = r.projects.filter(p => !p.registered);
+  if (unreg.length) L.push(`⚠ 未登録のため比較に含まれません（先に「プロジェクト検出」で登録）: ${unreg.map(p => p.name).join(' , ')}`);
+  const ps = r.projects.filter(p => p.registered);
+  if (ps.length < 2) return (L.join('\n') + '\n比較するには登録済みプロジェクトが2つ以上必要です。').trim();
+
+  const has = (p: CompareProduct, path: string) => p.perProject[path];
+  const pinkTag = (p: CompareProduct) => (p.requiresLil || p.requiresPoi)
+    ? ` 〔要${[p.requiresLil ? 'lilToon' : '', p.requiresPoi ? 'Poiyomi' : ''].filter(Boolean).join('+')}〕` : '';
+
+  if (ps.length === 2) {
+    const [A, B] = ps as [CompareResult['projects'][0], CompareResult['projects'][0]];
+    const inA = (p: CompareProduct) => has(p, A.path), inB = (p: CompareProduct) => has(p, B.path);
+    const common = r.products.filter(p => inA(p) && inB(p));
+    const onlyAraw = r.products.filter(p => inA(p) && !inB(p));
+    const onlyBraw = r.products.filter(p => inB(p) && !inA(p));
+    // 版違い: 「Aのみ」「Bのみ」に同名（中身=sig は別）の商品がいれば「別の版」とみなす
+    const aByName = new Map(onlyAraw.map(p => [p.fileName, p]));
+    const verNames = new Set(onlyBraw.filter(p => aByName.has(p.fileName)).map(p => p.fileName));
+    const onlyA = onlyAraw.filter(p => !verNames.has(p.fileName));
+    const onlyB = onlyBraw.filter(p => !verNames.has(p.fileName));
+
+    L.push('=== プロジェクト比較');
+    L.push(`   A = ${A.name}   (${A.path})`);
+    L.push(`   B = ${B.name}   (${B.path})`);
+    L.push(`\n● 共通 (${common.length})`);
+    for (const p of common) {
+      const a = Math.round(inA(p)!.pct), b = Math.round(inB(p)!.pct);
+      const note = Math.abs(a - b) >= 10 ? (a > b ? `   ⚠ B は一部だけ(${b}%)` : `   ⚠ A は一部だけ(${a}%)`) : '';
+      L.push(`   ・${p.fileName}   A${a}% / B${b}%${note}`);
+    }
+    L.push(`\n◀ A のみ (${onlyA.length})   ＝B へ移すなら追加導入`);
+    for (const p of onlyA) L.push(`   ・${p.fileName}${pinkTag(p)}`);
+    L.push(`\n▶ B のみ (${onlyB.length})`);
+    for (const p of onlyB) L.push(`   ・${p.fileName}${pinkTag(p)}`);
+    if (verNames.size) {
+      L.push(`\n⚠ 版違いの可能性 (${verNames.size})   ＝同名だが中身(GUID集合)が異なる`);
+      for (const name of verNames) L.push(`   ・${name}   A と B で別の版`);
+    }
+    return L.join('\n');
+  }
+
+  // 3プロジェクト以上: 全員/一部/単独 の3段階要約（生のN×Mグリッドは出さない）
+  const n = ps.length;
+  const cntOf = (p: CompareProduct) => ps.filter(pr => has(p, pr.path)).length;
+  L.push(`=== プロジェクト比較 (${n} プロジェクト)`);
+  ps.forEach((p, i) => L.push(`   ${i + 1}. ${p.name}`));
+  const allN = r.products.filter(p => cntOf(p) === n);
+  const some = r.products.filter(p => { const c = cntOf(p); return c > 1 && c < n; });
+  const solo = r.products.filter(p => cntOf(p) === 1);
+  L.push(`\n● 全員にある (${allN.length})`);
+  for (const p of allN) L.push(`   ・${p.fileName}`);
+  L.push(`\n◐ 一部にある (${some.length})`);
+  for (const p of some) L.push(`   ・${p.fileName}   [${ps.map((pr, i) => has(p, pr.path) ? i + 1 : '').filter(x => x !== '').join(',')}]`);
+  L.push(`\n○ 単独 (${solo.length})`);
+  for (const p of solo) L.push(`   ・${p.fileName}   [${ps.findIndex(pr => has(p, pr.path)) + 1}]${pinkTag(p)}`);
+  return L.join('\n');
 }
 
 function renderCard(p: Product, cover: string): string {

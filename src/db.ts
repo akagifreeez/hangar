@@ -35,6 +35,17 @@ export interface Product {
   category: string;         // 'tool' | 'model' | 'animation' | 'material' | 'other'
 }
 
+// プロジェクト横断比較の1商品(sig単位)の導入状況
+export interface CompareProduct {
+  sig: string;
+  fileName: string;
+  category: string;
+  requiresLil: boolean;
+  requiresPoi: boolean;
+  hasLocked: boolean;
+  perProject: Record<string, { pct: number; pkgId: number }>;  // key=project path（導入のあるものだけ）
+}
+
 export class Catalog {
   private db: DatabaseSync;
 
@@ -267,6 +278,50 @@ export class Catalog {
     }
     products.sort((a, b) => a.rep.file_name.localeCompare(b.rep.file_name));
     return products;
+  }
+
+  // プロジェクト横断比較: 指定 path の各プロジェクトについて、商品(sig)ごとの導入状況を返す。
+  // install_records の読み取りのみ(.meta 再走査なし)。dedupedProducts と同じく GUID集合署名(sig)で束ねる。
+  // 未登録/未 detect --save の path は projects[].registered=false となり perProject には現れない。
+  compareProjects(projectPaths: string[]): {
+    projects: { path: string; name: string; registered: boolean }[];
+    products: CompareProduct[];
+  } {
+    const byPath = new Map(this.allProjects().map(p => [p.path, p]));
+    const projects = projectPaths.map(path => {
+      const hit = byPath.get(path);
+      return { path, name: hit?.name ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? path), registered: !!hit };
+    });
+    const idToPath = new Map<number, string>();
+    for (const p of projects) { const hit = byPath.get(p.path); if (hit) idToPath.set(hit.id, p.path); }
+    if (idToPath.size === 0) return { projects, products: [] };
+
+    const ids = [...idToPath.keys()];
+    const installRows = this.db.prepare(
+      `SELECT package_id AS pid, project_id AS prid, pct FROM install_records
+       WHERE project_id IN (${ids.map(() => '?').join(',')})`
+    ).all(...ids) as unknown as { pid: number; prid: number; pct: number }[];
+
+    // package_id → (sig, メタ)。dedupedProducts と同じ束ね方で sig を算出。
+    const pkgById = new Map<number, PackageRow>();
+    const sigByPkg = new Map<number, string>();
+    for (const r of this.allPackages()) { pkgById.set(r.id, r); sigByPkg.set(r.id, guidSetHash(JSON.parse(r.guids_json) as string[])); }
+
+    const prodBySig = new Map<string, CompareProduct>();
+    for (const ir of installRows) {
+      const sig = sigByPkg.get(ir.pid); const pkg = pkgById.get(ir.pid); const path = idToPath.get(ir.prid);
+      if (!sig || !pkg || !path) continue;
+      let prod = prodBySig.get(sig);
+      if (!prod) {
+        prod = { sig, fileName: pkg.file_name, category: pkg.category ?? 'other',
+          requiresLil: !!pkg.requires_liltoon, requiresPoi: !!pkg.requires_poiyomi, hasLocked: !!pkg.has_locked, perProject: {} };
+        prodBySig.set(sig, prod);
+      }
+      const ex = prod.perProject[path];   // 同一sigの別コピーが両方記録されていれば高い pct を採用
+      if (!ex || ir.pct > ex.pct) prod.perProject[path] = { pct: ir.pct, pkgId: ir.pid };
+    }
+    const products = [...prodBySig.values()].sort((a, b) => a.fileName.localeCompare(b.fileName));
+    return { projects, products };
   }
 
   close(): void { this.db.close(); }

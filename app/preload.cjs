@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('hangar', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   pickFile: () => ipcRenderer.invoke('pick-file'),
   diff: (pkg, project) => ipcRenderer.invoke('diff', pkg, project),
+  compare: (projects) => ipcRenderer.invoke('compare', projects),
   saveTemplate: (projectDir, outDir) => ipcRenderer.invoke('save-template', projectDir, outDir),
   restoreTemplate: (templateDir, projectDir, force) => ipcRenderer.invoke('restore-template', templateDir, projectDir, force),
   onStatus: (cb) => ipcRenderer.on('status', (_e, m) => cb(m)),

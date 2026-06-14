@@ -195,6 +195,10 @@ ipcMain.handle('diff', (_e, pkg, project) => withJob(async () => {
   const r = await runCliJson(['diff', pkg, '--project', project, '--json']);
   return r.report;   // 失敗時 null（UI 側で原因表示）。直列化で連打/D&Dの多重起動を防ぐ。
 }));
+// プロジェクト横断比較(読み取り専用): compare --json の構造体 {projects, products} をそのまま返す。
+ipcMain.handle('compare', (_e, projects) => withJob(async () => {
+  return await runCliJson(['compare', ...projects, '--json']);
+}));
 // D&D 取込でドロップされたパスがフォルダか(=スキャン対象)を判定。ファイル(.zip等)はスキャンに回さない。
 ipcMain.handle('is-directory', (_e, p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
 // 再現テンプレ: 保存（自作分→テンプレ）/ 復元（テンプレ→まっさらなプロジェクト）。{ok, report, tail} を返す。
