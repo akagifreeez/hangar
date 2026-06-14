@@ -43,13 +43,19 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 #progtxt .fail{color:#ff9aa8}
 body.dragging::after{content:'📦 ここにドロップ（.unitypackage=取り込み前チェック / フォルダ=スキャン）';position:fixed;inset:14px;border:3px dashed #4a6cf7;border-radius:14px;background:rgba(74,108,247,.12);color:#cfe0ff;display:flex;align-items:center;justify-content:center;font-size:16px;z-index:30;pointer-events:none}
 body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframeを透過させ、親でdrop受信(iframeがdropを食う問題の回避) */
+.divider{width:1px;align-self:stretch;min-height:20px;background:#2a2a32;margin:2px 4px;flex:0 0 auto}
+.khint{color:#7a7a82;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center}
+.dragnote{display:flex;align-items:center;gap:8px;background:#1e2436;border:1px dashed #3a4a7a;border-radius:10px;padding:9px 14px;color:#9fb4e8;font-size:12px;max-width:560px;line-height:1.5;text-align:left}
+@keyframes nudge{0%,100%{box-shadow:0 0 0 0 rgba(74,108,247,0)}50%{box-shadow:0 0 0 4px rgba(74,108,247,.5)}}
+button.nudge{animation:nudge 1.3s ease-in-out infinite}
 </style></head><body>
 <div id="bar">
   <h1>Hangar</h1>
-  <button id="scan">📁 ライブラリをスキャン</button>
+  <button id="scan" title="ライブラリ(BOOTH等の保存先)をスキャン　(Ctrl+O)">📁 ライブラリをスキャン</button>
   <button id="detect" class="sec">🎯 プロジェクト検出</button>
-  <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む">🔄 再スキャン</button>
-  <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック">📦 取り込み前チェック</button>
+  <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む　(F5)">🔄 再スキャン</button>
+  <span class="divider"></span>
+  <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック　(Ctrl+D)">📦 取り込み前チェック</button>
   <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
   <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
   <span class="tag">VRChat非公式・ローカル限定</span>
@@ -64,6 +70,8 @@ body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframe
   <p id="emptymsg"></p>
   <button id="scan2" class="big">📁 まずライブラリ(BOOTH等の保存先)をスキャン</button>
   <p style="color:#6a6a72;font-size:12px">例: <b>…\Downloads</b> や BOOTH 保存先フォルダを選ぶと、中の .unitypackage を再帰的に解析します（数分かかることがあります）。</p>
+  <div class="dragnote">💡 ボタンを押さなくてもOK — <b>.unitypackage</b> や保存フォルダを、この画面に<b>ドラッグ&ドロップ</b>するだけ（パッケージ＝取り込み前チェック／フォルダ＝スキャン）。</div>
+  <div class="khint">⌨ <span class="kbd">Ctrl</span>+<span class="kbd">O</span> スキャン　<span class="kbd">Ctrl</span>+<span class="kbd">D</span> 取り込み前チェック　<span class="kbd">F5</span> 再スキャン　<span class="kbd">Esc</span> 閉じる</div>
 </div>
 <iframe id="cat" style="display:none"></iframe>
 
@@ -144,6 +152,18 @@ body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframe
     if (url) showCatalog(url); else showEmpty();
   }
 
+  // スキャン後の「次の一歩」誘導: プロジェクト未登録なら 🎯プロジェクト検出 を促す
+  async function nudgeNextStep(){
+    try {
+      const cfg = await window.hangar.getConfig();
+      const hasProj = cfg && cfg.projectDirs && cfg.projectDirs.length;
+      if (!hasProj) {
+        $('detect').classList.add('nudge');
+        setStatus('スキャン完了 — 次は <b>🎯 プロジェクト検出</b> で「どのアバターをどのプロジェクトに入れたか」を逆引きできます');
+      }
+    } catch {}
+  }
+
   async function doScanPath(folder){
     if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
     setBusy(true, 'スキャン中: ' + folder); clearError();
@@ -155,7 +175,7 @@ body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframe
         if (CAT_URL) setStatus('0件: このフォルダに .unitypackage はありませんでした（カタログは変更なし）');
         else showEmptyMsg('このフォルダに .unitypackage が見つかりませんでした。BOOTH のダウンロード先フォルダ（例: …\\Downloads）を選び直してください。');
       }
-      else setStatus('スキャン完了: ' + r.count + ' 件' + (r.failed ? ('（解析失敗 ' + r.failed + '）') : ''));
+      else { setStatus('スキャン完了: ' + r.count + ' 件' + (r.failed ? ('（解析失敗 ' + r.failed + '）') : '')); nudgeNextStep(); }
     } finally { setBusy(false); }
   }
   const doScan = async () => {
@@ -167,6 +187,7 @@ body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframe
   $('scan2').onclick = doScan;
 
   $('detect').onclick = async () => {
+    $('detect').classList.remove('nudge');
     if (BUSY) return;
     const f = await window.hangar.pickFolder({ multi: true, title: 'Unityプロジェクトのフォルダ(Assetsを含む)を選択' }); if (!f.length) return;
     setBusy(true, 'プロジェクト検出中…'); clearError();
@@ -389,6 +410,29 @@ body.dragging #cat{pointer-events:none}  /* ドラッグ中はカタログiframe
     const target = paths[0];
     if (await window.hangar.isDirectory(target)) doScanPath(target);   // フォルダ → スキャン
     else showError('ドロップできない種類です', ['フォルダ、または .unitypackage をドロップしてください（' + (target.split(/[\\/]/).pop()) + ' はスキャンできません）']);
+  });
+
+  // 背景クリックでモーダルを閉じる(カード内のクリック/ドラッグは無視するため mousedown の発生元で判定)
+  for (const ovId of ['diffov','tmplov']) {
+    $(ovId).addEventListener('mousedown', (e) => { if (e.target === $(ovId)) $(ovId).style.display = 'none'; });
+  }
+
+  // キーボード: Esc=閉じる(モーダル→エラーの順) / Ctrl+O=スキャン / Ctrl+D=取り込み前チェック / F5=再スキャン
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if ($('diffov').style.display === 'flex') { $('diffov').style.display = 'none'; return; }
+      if ($('tmplov').style.display === 'flex') { $('tmplov').style.display = 'none'; return; }
+      if ($('err').style.display === 'block') { clearError(); return; }
+      return;
+    }
+    // モーダル表示中はEsc以外のショートカットを無効化(背後の操作を防ぐ)
+    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex') return;
+    // 入力欄にフォーカス中はショートカット無効
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); doScan(); return; }
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); $('diffbtn').onclick(); return; }
+    if (e.key === 'F5') { e.preventDefault(); $('rescan').onclick(); return; }
   });
 
   refreshCatalog();
