@@ -225,6 +225,10 @@ async function main(): Promise<void> {
         const out = args[0] ?? 'hangar-catalog.html';
         const products = cat.dedupedProducts();
         const outDir = dirname(out);
+        // 版グループ: ファイル名から版サフィックス(_v1.2 / .1.0 等)を除いた基底名で束ね、中身(sig)が違うものを「別の版」とみなす
+        const verBase = (name: string) => name.replace(/\.unitypackage$/i, '').replace(/[ _\-]*v?\d+([._]\d+)*$/i, '').toLowerCase().trim();
+        const byBase = new Map<string, Product[]>();
+        for (const prod of products) { const b = verBase(prod.rep.file_name); if (b) { if (!byBase.has(b)) byBase.set(b, []); byBase.get(b)!.push(prod); } }
         const data = products.map(prod => {
           const r = prod.rep;
           const cover = (r.cover_guid && r.preview_dir) ? dataUri(join(r.preview_dir, r.cover_guid + '.png')) : '';
@@ -254,7 +258,9 @@ async function main(): Promise<void> {
           }
           const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : '', `cat-${prod.category}`].filter(Boolean).join(' ');
           // tags/category は固定語彙だが、data-tags 属性へ素で埋めるため念のためエスケープ(DOM注入の多層防御)。
-          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }), name: r.file_name, tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
+          const sibs = (byBase.get(verBase(r.file_name)) || []).filter(o => o.sig !== prod.sig);
+          const versions = sibs.map(o => ({ name: o.rep.file_name, installed: o.projects.length > 0 }));
+          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions), name: r.file_name, tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
         });
         writeFileSync(out, renderApp(data, products.length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -652,7 +658,7 @@ function renderCard(p: Product, cover: string): string {
     `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${badge}</div>`;
 }
 
-function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }): string {
+function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = []): string {
   const r = p.rep;
   const kinds = JSON.parse(r.kind_breakdown) as Record<string, number>;
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
@@ -684,11 +690,17 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
       p.copies.map(c => `<div class="cp">${esc(c)}</div>`).join('') + `</div>`
     : '';
   const gal = gallery.length ? `<div class="gallery">${gallery.map(g => `<img src="${g}" loading="lazy">`).join('')}</div>` : `<div class="none">preview.png なし</div>`;
+  // 別の版: 同名/類似名(版サフィックス除去後の基底名が一致)で中身(sig)が違う商品＝更新版や別バリエーション
+  const verSec = versions.length
+    ? `<h3>🔀 別の版がライブラリにあります（${versions.length}）</h3><div class="copies">` +
+      versions.map(v => `<div class="cp">${esc(v.name)}${v.installed ? ' <span class="chip">導入中</span>' : ''}</div>`).join('') +
+      `<div class="none" style="margin-top:6px">同名/類似名で中身(GUID)が違う＝更新版や別バリエーションの可能性。「📦 取り込み前チェック」でどれを入れるべきか確認できます。</div></div>`
+    : '';
   return `<div class="dhead">${hero ? `<img class="dhero" src="${hero}">` : ''}<div><h2>${esc(r.file_name)} ${dup}</h2>` +
     `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}<div class="chips">${chips}</div></div></div>` +
     faithful +
     `<h3>導入先（取り込み後の追跡）</h3>${inst}` +
-    copies +
+    copies + verSec +
     `<h3>中身（ファイル構成・100%表示）</h3><div class="tree">${treeHtml}</div>` +
     `<h3>プレビュー画像（${gallery.length}）</h3>${gal}`;
 }
