@@ -280,6 +280,14 @@ async function main(): Promise<void> {
         const quarantine = (qFlagIdx >= 0 && args[qFlagIdx + 1] && !args[qFlagIdx + 1]!.startsWith('--'))
           ? args[qFlagIdx + 1]! : join(process.cwd(), '_hangar_quarantine');
         const products = cat.dedupedProducts().filter(p => p.copyCount > 1);
+        if (args.includes('--json')) {
+          // ドライラン: 書き出さずに重複整理の要約だけ返す(GUIのプレビュー用)
+          const items = products.map(p => ({ name: p.rep.file_name, copyCount: p.copyCount, wastedBytes: p.wastedBytes }));
+          const fileCount = products.reduce((n, p) => n + (p.copyCount - 1), 0);
+          const freedBytes = products.reduce((n, p) => n + p.rep.size_bytes * (p.copyCount - 1), 0);
+          console.log(JSON.stringify({ productCount: products.length, fileCount, freedBytes, items }));
+          break;
+        }
         const score = (pth: string) => (/\\trash\\/i.test(pth) ? 1000 : 0) + (/\\test\\/i.test(pth) ? 500 : 0) + pth.length;
         const q = (s: string) => "'" + s.replace(/'/g, "''") + "'";
         const L: string[] = [];

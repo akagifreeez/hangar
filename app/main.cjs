@@ -203,6 +203,17 @@ ipcMain.handle('compare', (_e, projects) => withJob(async () => {
 ipcMain.handle('sprawl', () => withJob(async () => {
   return await runCliJson(['sprawl', '--json']);
 }));
+// 重複整理プレビュー(読み取り専用・書き出しなし): reclaim --json の要約を返す。
+ipcMain.handle('reclaim-preview', () => withJob(async () => {
+  return await runCliJson(['reclaim', '--json']);
+}));
+// 重複整理プラン書き出し: 指定フォルダに可逆プラン(.ps1)を生成(削除/移動はしない・スクリプトは本人が実行)。
+ipcMain.handle('reclaim-write', (_e, outDir) => withJob(async () => {
+  const script = path.join(outDir, 'reclaim_plan.ps1');
+  const quarantine = path.join(outDir, '_hangar_quarantine');
+  const { code, tail } = await runCli(['reclaim', script, '--quarantine', quarantine]);
+  return { ok: code === 0, script, quarantine, tail };
+}));
 // D&D 取込でドロップされたパスがフォルダか(=スキャン対象)を判定。ファイル(.zip等)はスキャンに回さない。
 ipcMain.handle('is-directory', (_e, p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
 // 再現テンプレ: 保存（自作分→テンプレ）/ 復元（テンプレ→まっさらなプロジェクト）。{ok, report, tail} を返す。

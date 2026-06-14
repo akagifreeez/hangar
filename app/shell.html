@@ -114,6 +114,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       <button id="cmpadd" class="sec" title="比較するプロジェクトを追加(3つ以上も可)">＋追加</button>
       <button id="cmprun">比較</button>
       <button id="cmpsprawl" class="sec" title="全プロジェクトで複数に散らばっている商品を俯瞰">📊 散らばり</button>
+      <button id="cmpreclaim" class="sec" title="中身が同じ重複コピーを1つ残して隔離する可逆プランを作成">🧹 重複整理</button>
       <button id="cmpclose" class="sec">閉じる</button>
     </div>
     <div id="cmpbody" class="ovbody"></div>
@@ -151,6 +152,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
 <script>
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const mb = b => (Number(b)/1048576).toFixed(1) + 'MB';
   const setStatus = m => { $('status').innerHTML = m; };
   let CAT_URL = '';
   let BUSY = false;
@@ -501,6 +503,29 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     const r = await window.hangar.sprawl();
     $('cmpbody').innerHTML = renderSprawl(r);
   };
+  $('cmpreclaim').onclick = async () => {
+    $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>重複を集計中…</div>';
+    const r = await window.hangar.reclaimPreview();
+    $('cmpbody').innerHTML = renderReclaim(r);
+  };
+  function renderReclaim(r){
+    if (!r || !r.productCount) return '<div class="dinfo">中身が同じ重複コピーはありません。</div>';
+    let h = '<div class="dinfo">重複コピー <b>'+r.productCount+'</b> 商品 ・ 移動対象 <b>'+r.fileCount+'</b> ファイル ・ 解放可能 約 <b>'+mb(r.freedBytes)+'</b></div><div class="dsec">';
+    h += (r.items||[]).slice(0,50).map(it=>'<div class="dconf">'+esc(it.name)+'<span class="sub">×'+it.copyCount+' ・ 無駄 '+mb(it.wastedBytes)+'</span></div>').join('');
+    if ((r.items||[]).length>50) h += '<div class="dinfo">… 他 '+(r.items.length-50)+' 件</div>';
+    h += '</div><div class="duncheck" style="margin-top:12px"><b>整理は可逆です</b>: 削除ではなく「隔離フォルダへ移動」するPowerShellプランを書き出すだけ（実行はあなた・確認後に隔離フォルダを削除して初めて空きます）。<div style="margin-top:8px"><button onclick="doReclaimWrite()">🧹 整理プランを書き出す…</button></div></div>';
+    return h;
+  }
+  async function doReclaimWrite(){
+    const out = await window.hangar.pickFolder({ title: '整理プラン(reclaim_plan.ps1)の出力先フォルダを選択' });
+    if (!out || !out.length) return;
+    $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>プランを書き出し中…</div>';
+    const r = await window.hangar.reclaimWrite(out[0]);
+    if (!r || !r.ok) { $('cmpbody').innerHTML = '<div class="red">書き出しに失敗しました。</div>'; return; }
+    $('cmpbody').innerHTML = '<div class="dsec"><h4 class="green">✓ 整理プランを書き出しました</h4>'
+      + '<div class="dconf">'+esc(r.script)+'</div>'
+      + '<div class="duncheck" style="margin-top:10px"><b>使い方</b>: このファイルを右クリック→「PowerShellで実行」。中身を確認のうえ <b>yes</b> で重複コピーが隔離フォルダ<br><span class="sub">'+esc(r.quarantine)+'</span><br>へ<b>移動</b>します（削除ではない＝元に戻せます）。中身を確認後、隔離フォルダを削除すると実際に空きます。</div></div>';
+  }
   const cmpPink = p => (p.requiresLil||p.requiresPoi) ? ' <span class="purple">〔要'+[p.requiresLil?'lilToon':'',p.requiresPoi?'Poiyomi':''].filter(Boolean).join('+')+'〕</span>' : '';
   function renderToolingDiff(reg, tg){
     const labels = {'jp.lilxyzw.liltoon':'lilToon','com.poiyomi.toon':'Poiyomi','com.vrchat.avatars':'VRChat SDK Avatars','com.vrchat.base':'VRChat SDK Base','nadena.dev.modular-avatar':'Modular Avatar'};

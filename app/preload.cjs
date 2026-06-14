@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('hangar', {
   diff: (pkg, project) => ipcRenderer.invoke('diff', pkg, project),
   compare: (projects) => ipcRenderer.invoke('compare', projects),
   sprawl: () => ipcRenderer.invoke('sprawl'),
+  reclaimPreview: () => ipcRenderer.invoke('reclaim-preview'),
+  reclaimWrite: (outDir) => ipcRenderer.invoke('reclaim-write', outDir),
   saveTemplate: (projectDir, outDir) => ipcRenderer.invoke('save-template', projectDir, outDir),
   restoreTemplate: (templateDir, projectDir, force) => ipcRenderer.invoke('restore-template', templateDir, projectDir, force),
   onStatus: (cb) => ipcRenderer.on('status', (_e, m) => cb(m)),
