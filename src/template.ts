@@ -160,7 +160,7 @@ function copyAncestorFolderMetas(projectDir: string, payloadRoot: string, rel: s
 
 // vpm-manifest.json（あれば）から VPM ツール依存を収穫。dependencies / locked の両方を見る。
 // parse失敗は parseError で報告（黙ってツール依存が消える silent wrong を防ぐ）。
-function readVpmTooling(projectRoot: string): { tooling: TemplateTooling[]; manifestPath?: string; parseError: boolean } {
+export function readVpmTooling(projectRoot: string): { tooling: TemplateTooling[]; manifestPath?: string; parseError: boolean } {
   const manifestPath = join(projectRoot, 'Packages', 'vpm-manifest.json');
   if (!existsSync(manifestPath)) return { tooling: [], parseError: false };
   try {

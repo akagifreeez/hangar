@@ -8,7 +8,7 @@ import { Catalog, type PackageRow, type Product, type CompareProduct } from './d
 import { scanDir } from './scan.js';
 import { projectGuids, matchPackages, expandProjectRoots } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
-import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, type CatalogPkg } from './template.js';
+import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, readVpmTooling, type CatalogPkg } from './template.js';
 import { renderPackage, findUnity, findLilToon, findPoiyomi } from './render.js';
 import { categoryLabel } from './classify.js';
 
@@ -92,10 +92,21 @@ async function main(): Promise<void> {
         const all = args.includes('--all');
         let paths = args.filter(a => !a.startsWith('--'));
         if (all || paths.length === 0) paths = cat.allProjects().map(p => p.path);
-        if (paths.length < 2) return fail('usage: compare <projA> <projB> [projC...] [--all] [--json]  （要: detect --save 済みプロジェクト2つ以上）');
+        const htmlCmpIdx = args.indexOf('--html');
+        const htmlCmpOut = htmlCmpIdx >= 0 ? args[htmlCmpIdx + 1] : undefined;
+        if (htmlCmpIdx >= 0 && (!htmlCmpOut || htmlCmpOut.startsWith('--'))) return fail('--html の値（出力HTMLパス）がありません');
+        paths = paths.filter(p => p !== htmlCmpOut);   // --html の値は比較対象から除外
+        if (paths.length < 2) return fail('usage: compare <projA> <projB> [projC...] [--all] [--json] [--html out.html]  （要: detect --save 済みプロジェクト2つ以上）');
         const result = cat.compareProjects(paths);
-        if (json) { console.log(JSON.stringify(result)); break; }
-        console.log(formatCompareText(result));
+        // Phase2: 各登録プロジェクトのVPMツール(版数)を vpm-manifest.json から軽量読取(.meta走査なし)
+        const tooling: Record<string, Record<string, string>> = {};
+        for (const pr of result.projects) if (pr.registered) {
+          tooling[pr.path] = Object.fromEntries(readVpmTooling(pr.path).tooling.map(t => [t.id, t.version ?? '']));
+        }
+        const full: CompareResult = { ...result, tooling };
+        if (htmlCmpOut) { writeFileSync(htmlCmpOut, formatCompareHtml(full), 'utf8'); console.log(`レポート(HTML): ${htmlCmpOut}`); }
+        if (json) { console.log(JSON.stringify(full)); break; }
+        console.log(formatCompareText(full));
         break;
       }
       case 'diff': {
@@ -447,7 +458,29 @@ function catBadge(category: string): string {
   return `<span class="catb cat-${esc(category)}">${esc(categoryLabel(category as never))}</span>`;
 }
 
-type CompareResult = { projects: { path: string; name: string; registered: boolean }[]; products: CompareProduct[] };
+type CompareResult = {
+  projects: { path: string; name: string; registered: boolean }[];
+  products: CompareProduct[];
+  tooling?: Record<string, Record<string, string>>;   // path -> {vpm id: version}
+};
+
+const PINK_TOOL_IDS = new Set(['jp.lilxyzw.liltoon', 'com.poiyomi.toon']);
+const TOOL_LABEL: Record<string, string> = {
+  'jp.lilxyzw.liltoon': 'lilToon', 'com.poiyomi.toon': 'Poiyomi',
+  'com.vrchat.avatars': 'VRChat SDK Avatars', 'com.vrchat.base': 'VRChat SDK Base', 'nadena.dev.modular-avatar': 'Modular Avatar',
+};
+
+// 指定 path 群について、VPMツールの「版違い or 片方欠落」だけを行にして返す（pink関連を先頭に）。
+function toolingRows(paths: string[], tooling?: Record<string, Record<string, string>>): { id: string; label: string; versions: (string | undefined)[]; pink: boolean }[] {
+  if (!tooling) return [];
+  const ids = new Set<string>();
+  for (const p of paths) for (const id of Object.keys(tooling[p] ?? {})) ids.add(id);
+  return [...ids].map(id => {
+    const versions = paths.map(p => tooling[p]?.[id]);
+    const differs = new Set(versions.map(v => v ?? '∅')).size > 1;
+    return { id, label: TOOL_LABEL[id] ?? id, versions, pink: PINK_TOOL_IDS.has(id), differs };
+  }).filter(r => r.differs).sort((a, b) => (b.pink ? 1 : 0) - (a.pink ? 1 : 0) || a.label.localeCompare(b.label));
+}
 
 function formatCompareText(r: CompareResult): string {
   const L: string[] = [];
@@ -489,6 +522,11 @@ function formatCompareText(r: CompareResult): string {
       L.push(`\n⚠ 版違いの可能性 (${verNames.size})   ＝同名だが中身(GUID集合)が異なる`);
       for (const name of verNames) L.push(`   ・${name}   A と B で別の版`);
     }
+    const tRows = toolingRows([A.path, B.path], r.tooling);
+    if (tRows.length) {
+      L.push(`\n⚙ シェーダ/SDK差 (${tRows.length})   ＝VPM版違い/欠落（要シェーダ商品は移行時ピンク注意）`);
+      for (const t of tRows) L.push(`   ${t.pink ? '⚠ ' : ''}${t.label}   A:${t.versions[0] ?? '無'} / B:${t.versions[1] ?? '無'}`);
+    }
     return L.join('\n');
   }
 
@@ -506,7 +544,46 @@ function formatCompareText(r: CompareResult): string {
   for (const p of some) L.push(`   ・${p.fileName}   [${ps.map((pr, i) => has(p, pr.path) ? i + 1 : '').filter(x => x !== '').join(',')}]`);
   L.push(`\n○ 単独 (${solo.length})`);
   for (const p of solo) L.push(`   ・${p.fileName}   [${ps.findIndex(pr => has(p, pr.path)) + 1}]${pinkTag(p)}`);
+  const tRowsN = toolingRows(ps.map(p => p.path), r.tooling);
+  if (tRowsN.length) {
+    L.push(`\n⚙ シェーダ/SDK差 (${tRowsN.length})`);
+    for (const t of tRowsN) L.push(`   ${t.pink ? '⚠ ' : ''}${t.label}   ${t.versions.map((v, i) => `${i + 1}:${v ?? '無'}`).join(' / ')}`);
+  }
   return L.join('\n');
+}
+
+function formatCompareHtml(r: CompareResult): string {
+  const e = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const ps = r.projects.filter(p => p.registered);
+  const has = (p: CompareProduct, path: string) => p.perProject[path];
+  const pink = (p: CompareProduct) => (p.requiresLil || p.requiresPoi) ? ` <span class="pink">〔要${[p.requiresLil ? 'lilToon' : '', p.requiresPoi ? 'Poiyomi' : ''].filter(Boolean).join('+')}〕</span>` : '';
+  const sec = (cls: string, title: string, items: string[]) => `<h2 class="${cls}">${title} (${items.length})</h2><div class="list">${items.length ? items.join('') : '<div class="muted">なし</div>'}</div>`;
+  let body = '';
+  if (ps.length === 2) {
+    const [A, B] = ps as [CompareResult['projects'][0], CompareResult['projects'][0]];
+    const inA = (p: CompareProduct) => has(p, A.path), inB = (p: CompareProduct) => has(p, B.path);
+    const common = r.products.filter(p => inA(p) && inB(p));
+    const oAraw = r.products.filter(p => inA(p) && !inB(p));
+    const oBraw = r.products.filter(p => inB(p) && !inA(p));
+    const aByName = new Map(oAraw.map(p => [p.fileName, p]));
+    const verNames = new Set(oBraw.filter(p => aByName.has(p.fileName)).map(p => p.fileName));
+    const oA = oAraw.filter(p => !verNames.has(p.fileName)), oB = oBraw.filter(p => !verNames.has(p.fileName));
+    body += `<div class="head">A = <b>${e(A.name)}</b> ／ B = <b>${e(B.name)}</b></div>`;
+    body += sec('g', '● 共通', common.map(p => { const a = Math.round(inA(p)!.pct), b = Math.round(inB(p)!.pct); const note = Math.abs(a - b) >= 10 ? ` <span class="o">⚠ ${a > b ? 'B' : 'A'} は一部だけ(${a > b ? b : a}%)</span>` : ''; return `<div class="row">${e(p.fileName)} <span class="muted">A${a}% / B${b}%</span>${note}</div>`; }));
+    body += sec('o', '◀ A のみ（B へ移すなら追加導入）', oA.map(p => `<div class="row">${e(p.fileName)}${pink(p)}</div>`));
+    body += sec('o', '▶ B のみ', oB.map(p => `<div class="row">${e(p.fileName)}${pink(p)}</div>`));
+    if (verNames.size) body += sec('r', '⚠ 版違いの可能性', [...verNames].map(n => `<div class="row">${e(n)} <span class="muted">A と B で別の版</span></div>`));
+    const tRows = toolingRows([A.path, B.path], r.tooling);
+    if (tRows.length) body += sec('r', '⚙ シェーダ/SDK差', tRows.map(t => `<div class="row">${t.pink ? '⚠ ' : ''}${e(t.label)} <span class="muted">A:${e(t.versions[0] ?? '無')} / B:${e(t.versions[1] ?? '無')}</span></div>`));
+  } else {
+    body += `<div class="head">${ps.length} プロジェクト: ${ps.map((p, i) => `${i + 1}.${e(p.name)}`).join(' / ')}</div>`;
+    const cntOf = (p: CompareProduct) => ps.filter(pr => has(p, pr.path)).length;
+    body += sec('g', '● 全員にある', r.products.filter(p => cntOf(p) === ps.length).map(p => `<div class="row">${e(p.fileName)}</div>`));
+    body += sec('o', '◐ 一部にある', r.products.filter(p => { const c = cntOf(p); return c > 1 && c < ps.length; }).map(p => `<div class="row">${e(p.fileName)} <span class="muted">[${ps.map((pr, i) => has(p, pr.path) ? i + 1 : '').filter(x => x !== '').join(',')}]</span></div>`));
+    body += sec('o', '○ 単独', r.products.filter(p => cntOf(p) === 1).map(p => `<div class="row">${e(p.fileName)} <span class="muted">[${ps.findIndex(pr => has(p, pr.path)) + 1}]</span>${pink(p)}</div>`));
+  }
+  const style = 'body{margin:0;background:#16161a;color:#e8e8ea;font-family:system-ui,sans-serif;padding:24px;line-height:1.6}h1{font-size:18px}.head{color:#cfcfd6;margin:8px 0 16px}h2{font-size:14px;margin:18px 0 6px}.g{color:#9ae7c2}.o{color:#e7c89a}.r{color:#ff9aa8}.list{font-family:ui-monospace,Consolas,monospace;font-size:13px}.row{padding:3px 0;border-bottom:1px solid #222228}.muted{color:#9a9aa2}.pink{color:#c3b6ff}';
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>プロジェクト比較</title><style>${style}</style></head><body><h1>🔀 プロジェクト比較レポート</h1>${body}<footer style="margin-top:24px;color:#6a6a72;font-size:12px">Hangar — ローカル生成・パス/商品名を含みます（共有時は注意）。</footer></body></html>`;
 }
 
 function renderCard(p: Product, cover: string): string {

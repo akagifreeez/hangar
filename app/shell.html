@@ -476,6 +476,17 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     h += '<div class="dsec"><h4 class="orange">◀ A のみ ('+oA.length+') ＝B へ移すなら追加導入</h4>'+list(oA)+'</div>';
     h += '<div class="dsec"><h4 class="orange">▶ B のみ ('+oB.length+')</h4>'+list(oB)+'</div>';
     if (verNames.size) h += '<div class="dsec"><h4 class="red">⚠ 版違いの可能性 ('+verNames.size+') ＝同名だが中身が異なる</h4>'+[...verNames].map(n=>'<div class="dconf">'+esc(n)+'<span class="sub">A と B で別の版</span></div>').join('')+'</div>';
+    // シェーダ/SDK差(VPM版違い/欠落)
+    const tg = r.tooling || {};
+    const labels = {'jp.lilxyzw.liltoon':'lilToon','com.poiyomi.toon':'Poiyomi','com.vrchat.avatars':'VRChat SDK Avatars','com.vrchat.base':'VRChat SDK Base','nadena.dev.modular-avatar':'Modular Avatar'};
+    const pinkIds = {'jp.lilxyzw.liltoon':1,'com.poiyomi.toon':1};
+    const ta = tg[A.path] || {}, tb = tg[B.path] || {};
+    const ids = [...new Set([...Object.keys(ta), ...Object.keys(tb)])].filter(id => (ta[id]||'∅') !== (tb[id]||'∅')).sort((x,y)=>(pinkIds[y]?1:0)-(pinkIds[x]?1:0));
+    if (ids.length) {
+      h += '<div class="dsec"><h4 class="orange">⚙ シェーダ/SDK差 ('+ids.length+') ＝VPM版違い/欠落（要シェーダ商品は移行時ピンク注意）</h4>';
+      h += ids.map(id=>'<div class="dconf">'+(pinkIds[id]?'<span class="purple">⚠ </span>':'')+esc(labels[id]||id)+'<span class="sub">A:'+esc(ta[id]||'無')+' / B:'+esc(tb[id]||'無')+'</span></div>').join('');
+      h += '</div>';
+    }
     return h;
   }
 
