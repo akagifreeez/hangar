@@ -287,13 +287,15 @@ export class Catalog {
     projects: { path: string; name: string; registered: boolean }[];
     products: CompareProduct[];
   } {
-    const byPath = new Map(this.allProjects().map(p => [p.path, p]));
+    // パス照合は正規化(大文字小文字/区切り\//末尾スラッシュの差を吸収)。DBに d: と D: が混在しても一致させる。
+    const norm = (s: string) => s.replace(/[\\/]+/g, '\\').replace(/\\+$/, '').toLowerCase();
+    const byPath = new Map(this.allProjects().map(p => [norm(p.path), p]));
     const projects = projectPaths.map(path => {
-      const hit = byPath.get(path);
+      const hit = byPath.get(norm(path));
       return { path, name: hit?.name ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? path), registered: !!hit };
     });
     const idToPath = new Map<number, string>();
-    for (const p of projects) { const hit = byPath.get(p.path); if (hit) idToPath.set(hit.id, p.path); }
+    for (const p of projects) { const hit = byPath.get(norm(p.path)); if (hit) idToPath.set(hit.id, p.path); }
     if (idToPath.size === 0) return { projects, products: [] };
 
     const ids = [...idToPath.keys()];

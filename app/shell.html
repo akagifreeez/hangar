@@ -6,7 +6,11 @@ button{background:#4a6cf7;color:#fff;border:0;border-radius:6px;padding:7px 12px
 button.sec{background:#2a2a34;color:#ddd}
 button:hover:not(:disabled){filter:brightness(1.12)}
 button:disabled{opacity:.4;cursor:not-allowed}
-input{background:#2a2a34;border:1px solid #3a3a44;color:#ddd;border-radius:6px;padding:6px 8px;font-size:12px}
+input,select{background:#2a2a34;border:1px solid #3a3a44;color:#ddd;border-radius:6px;padding:6px 8px;font-size:12px}
+select{cursor:pointer;max-width:200px}
+.cmprow{display:inline-flex;align-items:center;gap:2px}
+.cmpx{background:#2a2a34;color:#9a9aa2;border:1px solid #3a3a44;border-radius:6px;padding:5px 7px;font-size:11px;cursor:pointer;line-height:1}
+.cmpx:hover{background:#5a2330;color:#ff9aa8}
 #status{margin-left:auto;color:#9a9aa2;font-size:12px;max-width:46%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid #ffffff66;border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;margin-right:5px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -471,10 +475,15 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   const cmpBase = p => (String(p).split(/[\\/]/).filter(Boolean).pop() || p);
   function cmpAddSelect(sel){
     if (!CMP_PROJECTS.length) return;
+    const row = document.createElement('span'); row.className = 'cmprow';
     const s = document.createElement('select');
     s.innerHTML = CMP_PROJECTS.map(p => '<option value="'+esc(p.path)+'">'+esc(p.name || cmpBase(p.path))+'</option>').join('');
     s.selectedIndex = Math.min(sel, CMP_PROJECTS.length - 1);
-    $('cmpsel').appendChild(s);
+    row.appendChild(s);
+    const x = document.createElement('button'); x.className = 'cmpx'; x.textContent = '✕'; x.title = 'この行を外す（最低2つは必要）';
+    x.onclick = () => { if ($('cmpsel').querySelectorAll('select').length > 2) row.remove(); };
+    row.appendChild(x);
+    $('cmpsel').appendChild(row);
   }
   function cmpSelected(){
     return [...$('cmpsel').querySelectorAll('select')].map(s => s.value).filter((v, i, a) => v && a.indexOf(v) === i);
@@ -548,7 +557,10 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     const unreg = (r.projects||[]).filter(p=>!p.registered);
     let h = '';
     if (unreg.length) h += '<div class="duncheck">⚠ 未登録のため比較対象外: '+unreg.map(p=>esc(p.name)).join(' , ')+'（先に 🎯 プロジェクト検出）</div>';
-    if (reg.length < 2) return h + '<div class="dinfo">登録済みプロジェクトが2つ以上必要です。</div>';
+    if (reg.length < 2) {
+      const bad = (r.projects||[]).filter(p=>!p.registered).map(p=>esc(p.name||p.path));
+      return h + '<div class="dinfo">登録済みプロジェクトが2つ以上必要です。'+(bad.length?'<br><span class="orange">未登録扱い:</span> '+bad.join(' ， ')+'<br>→「🎯 プロジェクト検出」で登録するか、Hangarを完全に再起動してください。':'')+'</div>';
+    }
     const has = (p, path) => p.perProject[path];
     const prods = r.products||[];
     if (reg.length === 2) {
