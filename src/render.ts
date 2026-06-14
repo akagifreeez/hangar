@@ -108,7 +108,7 @@ export function findPoiyomi(projectRoots: string[] = []): string | null {
   return findPackageFolder('com.poiyomi.toon', 'HANGAR_POIYOMI', projectRoots);
 }
 
-export interface RenderResult { ok: boolean; hero: boolean; glb: boolean; logFile: string; }
+export interface RenderResult { ok: boolean; hero: boolean; glb: boolean; logFile: string; count: number; }
 
 export async function renderPackage(opts: {
   packageFile: string; hash: string; cacheDir: string;
@@ -151,11 +151,50 @@ export async function renderPackage(opts: {
     { env, stdio: 'ignore', timeout: 12 * 60 * 1000 });
 
   // unityOut は直前に消してあるので、ここに在る出力は必ず「今回の実行」が生成したもの。
-  const heroSrc = ['model_34.png', 'model_front.png', 'model_side.png'].map(f => join(unityOut, f)).find(p => existsSync(p));
-  let hero = false, glb = false;
-  if (heroSrc) { copyFileSync(heroSrc, join(renderDir, 'hero.png')); hero = true; }
-  const glbSrc = join(unityOut, 'model.glb');
-  if (existsSync(glbSrc)) { writeViewerHtml(glbSrc, join(renderDir, 'viewer.html')); glb = true; }
+  // 複数prefab対応: Unityは model{i}_{front|34|side|back}.png と model{i}.glb を i=0.. で出力し、
+  // previews.txt(index\t名前\tレンダラ数) を添える。index0 が代表(=hero)。
+  let hero = false, glb = false, count = 0;
+  const heroAngles = (i: number) => [`model${i}_34.png`, `model${i}_front.png`, `model${i}_side.png`, `model${i}_back.png`]
+    .map(f => join(unityOut, f)).find(p => existsSync(p));
+
+  const names = new Map<number, string>();
+  const manifestFile = join(unityOut, 'previews.txt');
+  if (existsSync(manifestFile)) {
+    for (const line of readFileSync(manifestFile, 'utf8').split('\n')) {
+      const tab = line.split('\t');
+      if (tab[0] !== undefined && tab[0] !== '') names.set(Number(tab[0]), (tab[1] ?? '').trim());
+    }
+  }
+
+  const indices: number[] = [];
+  for (let i = 0; i < 64; i++) if (existsSync(join(unityOut, `model${i}.glb`)) || heroAngles(i)) indices.push(i);
+
+  if (indices.length) {
+    const rep = indices[0]!;
+    const repHero = heroAngles(rep);
+    if (repHero) { copyFileSync(repHero, join(renderDir, 'hero.png')); hero = true; }
+    const prefabs: { name: string; glbPath: string }[] = [];
+    const manifest: { index: number; name: string; thumb: string }[] = [];
+    for (const i of indices) {
+      const th = heroAngles(i);
+      let thumb = '';
+      if (th) { copyFileSync(th, join(renderDir, `preview${i}.png`)); thumb = `preview${i}.png`; }
+      const name = names.get(i) || `プレハブ ${i + 1}`;
+      const g = join(unityOut, `model${i}.glb`);
+      if (existsSync(g)) prefabs.push({ name, glbPath: g });
+      manifest.push({ index: i, name, thumb });
+    }
+    if (prefabs.length) { writeViewerHtmlMulti(prefabs, join(renderDir, 'viewer.html')); glb = true; }
+    writeFileSync(join(renderDir, 'previews.json'), JSON.stringify(manifest));
+    count = manifest.length;
+  } else {
+    // 後方互換: 旧形式(model_*.png / model.glb)を1個として拾う
+    const legacyHero = ['model_34.png', 'model_front.png', 'model_side.png'].map(f => join(unityOut, f)).find(p => existsSync(p));
+    if (legacyHero) { copyFileSync(legacyHero, join(renderDir, 'hero.png')); copyFileSync(legacyHero, join(renderDir, 'preview0.png')); hero = true; }
+    const legacyGlb = join(unityOut, 'model.glb');
+    if (existsSync(legacyGlb)) { writeViewerHtmlMulti([{ name: '', glbPath: legacyGlb }], join(renderDir, 'viewer.html')); glb = true; }
+    if (hero || glb) { writeFileSync(join(renderDir, 'previews.json'), JSON.stringify([{ index: 0, name: '', thumb: 'preview0.png' }])); count = 1; }
+  }
   if (!hero && !glb) {
     // 成果物ゼロ＝失敗。Unityの終了コードは警告等で不安定なので、出力が在れば成功扱い・無ければ理由を添えて失敗。
     const reason = res.error ? ('Unity起動に失敗しました: ' + res.error.message)
@@ -163,32 +202,44 @@ export async function renderPackage(opts: {
       : (res.status != null && res.status !== 0) ? (`Unityが異常終了しました(code ${res.status})`)
       : 'Unityが画像/GLBを生成しませんでした(シェーダ未検出・ライセンス等)';
     log('  ⚠ ' + reason + ' → ログ: ' + logFile);
-    return { ok: false, hero, glb, logFile };
+    return { ok: false, hero, glb, logFile, count };
   }
-  return { ok: true, hero, glb, logFile };
+  if (count > 1) log(`  ${count} 体のプレハブを個別生成 → 3Dビューアで切替可`);
+  return { ok: true, hero, glb, logFile, count };
 }
 
-function writeViewerHtml(glbPath: string, outHtml: string): void {
-  const b64 = readFileSync(glbPath).toString('base64');
+// 複数prefab対応の3Dビューア: 各GLBをbase64で隠し持ち、上部タブで切替(選択時に遅延parse)。
+function writeViewerHtmlMulti(items: { name: string; glbPath: string }[], outHtml: string): void {
+  const safe = items.filter(it => existsSync(it.glbPath));
+  if (safe.length === 0) return;
+  const escHtml = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const tabs = safe.map((it, i) => `<button class="tab" data-i="${i}" onclick="show(${i})">${escHtml(it.name || ('プレハブ ' + (i + 1)))}</button>`).join('');
+  const glbTags = safe.map((it, i) => '<script id="glb' + i + '" type="text/plain">' + readFileSync(it.glbPath).toString('base64') + '</' + 'script>').join('');
   const head = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<title>3D preview</title><style>html,body{margin:0;height:100%;background:#202024;overflow:hidden;font-family:sans-serif}'
-    + '#info{position:fixed;left:10px;top:8px;color:#bbb;font-size:12px;z-index:2}#err{position:fixed;left:10px;top:30px;color:#f88;font-size:13px;white-space:pre;z-index:2}</style>'
+    + '#info{position:fixed;left:10px;bottom:8px;color:#bbb;font-size:12px;z-index:2}#err{position:fixed;left:10px;top:48px;color:#f88;font-size:13px;white-space:pre;z-index:2}'
+    + '#bar{position:fixed;left:0;right:0;top:0;display:flex;gap:6px;padding:8px 10px;background:rgba(20,20,24,.82);z-index:3;flex-wrap:wrap;align-items:center}'
+    + '#bar .lbl{color:#8a8a92;font-size:12px;margin-right:4px}.tab{background:#2a2a34;color:#ddd;border:0;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer}.tab.on{background:#4a6cf7;color:#fff}</style>'
     + '<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" }}</' + 'script></head><body>'
+    + (safe.length > 1 ? ('<div id="bar"><span class="lbl">プレハブ ' + safe.length + '体 →</span>' + tabs + '</div>') : '')
     + '<div id="info">ドラッグ=回転 / ホイール=ズーム (Unity不要・three.jsで描画)</div><div id="err"></div>'
-    + '<script id="glb" type="text/plain">' + b64 + '</' + 'script>'
+    + glbTags
     + '<script type="module">'
     + "import * as THREE from 'three';"
     + "import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';"
     + "import { OrbitControls } from 'three/addons/controls/OrbitControls.js';"
-    + "const errEl=document.getElementById('err');"
-    + "try{const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.appendChild(renderer.domElement);"
-    + "const scene=new THREE.Scene();scene.background=new THREE.Color(0x202024);scene.add(new THREE.HemisphereLight(0xffffff,0x444455,1.2));const dl=new THREE.DirectionalLight(0xffffff,1.0);dl.position.set(1,2,2);scene.add(dl);"
-    + "const camera=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,0.01,100);const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;"
-    + "const b=atob(document.getElementById('glb').textContent.trim());const u8=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u8[i]=b.charCodeAt(i);"
-    + "new GLTFLoader().parse(u8.buffer,'',(g)=>{scene.add(g.scene);const box=new THREE.Box3().setFromObject(g.scene);const c=box.getCenter(new THREE.Vector3());const s=box.getSize(new THREE.Vector3());const r=Math.max(s.x,s.y,s.z)||1;controls.target.copy(c);camera.position.set(c.x,c.y+r*0.05,c.z-r*1.6);camera.near=r/100;camera.far=r*100;camera.updateProjectionMatrix();},(e)=>{errEl.textContent='parse error: '+e;});"
+    + "const errEl=document.getElementById('err');let renderer,scene,camera,controls,current;"
+    + "function init(){renderer=new THREE.WebGLRenderer({antialias:true});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.appendChild(renderer.domElement);"
+    + "scene=new THREE.Scene();scene.background=new THREE.Color(0x202024);scene.add(new THREE.HemisphereLight(0xffffff,0x444455,1.2));const dl=new THREE.DirectionalLight(0xffffff,1.0);dl.position.set(1,2,2);scene.add(dl);"
+    + "camera=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,0.01,100);controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;"
     + "addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});"
-    + "(function loop(){requestAnimationFrame(loop);controls.update();renderer.render(scene,camera);})();"
-    + "}catch(e){errEl.textContent='init error: '+e+' (three.jsをCDNから読みます。ネット接続が必要)';}"
+    + "(function loop(){requestAnimationFrame(loop);controls.update();renderer.render(scene,camera);})();}"
+    + "function show(i){errEl.textContent='';try{document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',(+t.dataset.i)===i));"
+    + "if(current){scene.remove(current);current=null;}const el=document.getElementById('glb'+i);if(!el)return;"
+    + "const b=atob(el.textContent.trim());const u8=new Uint8Array(b.length);for(let k=0;k<b.length;k++)u8[k]=b.charCodeAt(k);"
+    + "new GLTFLoader().parse(u8.buffer,'',(g)=>{current=g.scene;scene.add(current);const box=new THREE.Box3().setFromObject(current);const c=box.getCenter(new THREE.Vector3());const s=box.getSize(new THREE.Vector3());const r=Math.max(s.x,s.y,s.z)||1;controls.target.copy(c);camera.position.set(c.x,c.y+r*0.05,c.z-r*1.6);camera.near=r/100;camera.far=r*100;camera.updateProjectionMatrix();},(e)=>{errEl.textContent='parse error: '+e;});"
+    + "}catch(e){errEl.textContent='init error: '+e+' (three.jsをCDNから読みます。ネット接続が必要)';}}"
+    + "window.show=show;init();show(0);"
     + '</' + 'script></body></html>';
   writeFileSync(outHtml, head, 'utf8');
 }

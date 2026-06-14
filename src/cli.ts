@@ -189,9 +189,20 @@ async function main(): Promise<void> {
           const viewerPath = renderDir ? join(renderDir, 'viewer.html') : '';
           const heroUri = heroPath && existsSync(heroPath) ? dataUri(heroPath) : '';
           const viewerHref = viewerPath && existsSync(viewerPath) ? relative(outDir, viewerPath).replace(/\\/g, '/') : '';
+          // 複数prefab: previews.json の各サムネ(preview{i}.png)を相対参照で拾う(dataURI化せずカタログ肥大を避ける)
+          let prefabThumbs: string[] = [];
+          if (renderDir) {
+            const pj = join(renderDir, 'previews.json');
+            if (existsSync(pj)) {
+              try {
+                const arr = JSON.parse(readFileSync(pj, 'utf8')) as { thumb?: string }[];
+                prefabThumbs = arr.map(a => a.thumb ? relative(outDir, join(renderDir, a.thumb)).replace(/\\/g, '/') : '').filter(Boolean);
+              } catch { /* previews.json壊れ等は無視 */ }
+            }
+          }
           const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : '', `cat-${prod.category}`].filter(Boolean).join(' ');
           // tags/category は固定語彙だが、data-tags 属性へ素で埋めるため念のためエスケープ(DOM注入の多層防御)。
-          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref }), name: r.file_name, tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
+          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }), name: r.file_name, tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
         });
         writeFileSync(out, renderApp(data, products.length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -308,7 +319,7 @@ async function main(): Promise<void> {
           onLog: (m) => console.log(m),
         });
         if (res.ok) {
-          console.log(`  OK hero:${res.hero} glb:${res.glb} -> cache/renders/${hash}/`);
+          console.log(`  OK hero:${res.hero} glb:${res.glb} prefab:${res.count} -> cache/renders/${hash}/`);
           console.log('  → catalog を再生成すると詳細に「忠実プレビュー＋3Dで回す」が出ます。');
         } else {
           console.log(`  失敗。ログ: ${res.logFile}`);
@@ -429,7 +440,7 @@ function renderCard(p: Product, cover: string): string {
     `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${badge}</div>`;
 }
 
-function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string }): string {
+function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }): string {
   const r = p.rep;
   const kinds = JSON.parse(r.kind_breakdown) as Record<string, number>;
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
@@ -440,9 +451,15 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
   const genBtn = p.category === 'model'
     ? `<button class="genbtn-d" onclick="hangarRender(CUR)" title="裏でUnity+lilToonを起動し、忠実プレビュー画像と3D(GLB)を生成します（数分）">🎬 ${render.heroUri ? '3Dを再生成' : 'この商品を3D生成'}</button>`
     : '';
+  const thumbN = render.prefabThumbs ? render.prefabThumbs.length : 0;
+  const ffthumbs = thumbN > 1
+    ? `<div class="ffthumbs">${render.prefabThumbs!.map((t, i) => `<img class="ffth" src="${t}" loading="lazy" title="プレハブ ${i + 1}">`).join('')}</div>`
+    : '';
+  const countBadge = thumbN > 1 ? ` <span class="ffcount">プレハブ ${thumbN}体</span>` : '';
+  const viewerLabel = thumbN > 1 ? `▶ 3Dで回す（${thumbN}体・切替可）` : '▶ 3Dで回す（GLB・Unity不要）';
   const faithful = render.heroUri
-    ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` +
-      (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">▶ 3Dで回す（GLB・Unity不要）</a>` : '') + genBtn + `</div>`
+    ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）${countBadge}</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` + ffthumbs +
+      (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">${viewerLabel}</a>` : '') + genBtn + `</div>`
     : (p.category === 'model'
       ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><div class="none">まだ生成していません（Unity + lilToon があれば本物のシェーダで焼けます）。</div>${genBtn}</div>`
       : '');
@@ -533,6 +550,9 @@ header .sub{color:#888;font-size:12px}
 .gallery img{width:100%;aspect-ratio:1/1;object-fit:contain;background:#0e0e12;border-radius:6px}
 .faithful{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:4px}
 .ffimg{width:260px;max-width:100%;border-radius:8px;background:#0e0e12}
+.ffcount{font-size:12px;color:#9ae7c2;background:#234a3a;border-radius:99px;padding:1px 9px;margin-left:6px;vertical-align:middle}
+.ffthumbs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%;margin-top:4px}
+.ffthumbs .ffth{width:72px;height:72px;object-fit:contain;background:#0e0e12;border:1px solid #2a2a32;border-radius:6px}
 .btn3d{display:inline-block;background:#4a6cf7;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px}
 .btn3d:hover{background:#5a78ff}
 .copies{font-size:11px;font-family:ui-monospace,Consolas,monospace}

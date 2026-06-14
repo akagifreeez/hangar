@@ -5,10 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 
-// 任意の .unitypackage 展開物から「代表prefab(レンダラ最多)」を自動選定し、
-// 本物のlilToンで多角度PNGレンダ + 軽量GLB(model.glb)を書き出す。
+// 任意の .unitypackage 展開物から、レンダラ(Skinned/Mesh)を持つprefabを
+// レンダラ数の多い順に最大 MAX_PREFABS 個まで個別に選定し、それぞれを
+// 本物のlilToンで多角度PNG(model{i}_*.png) + 軽量GLB(model{i}.glb)に焼く。
+// index0 が代表(従来のhero相当)。マニフェスト previews.txt(index\t名前\tレンダラ数)も出す。
 public static class RenderPreview
 {
+    const int MAX_PREFABS = 8;   // 1パッケージあたりの個別プレビュー上限(レンダ時間とビューア肥大の兼ね合い)
+
     public static void Run()
     {
         try { RunInner(); }
@@ -23,10 +27,9 @@ public static class RenderPreview
 
         AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-        // 代表prefab = インスタンス化してレンダラが最も多いもの
-        string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" });
-        GameObject best = null; int bestCount = -1;
-        foreach (var g in guids)
+        // 候補prefab = インスタンス化してレンダラ(Skinned/Mesh)を1つ以上持つもの
+        var cands = new List<(GameObject prefab, string name, int count)>();
+        foreach (var g in AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" }))
         {
             var path = AssetDatabase.GUIDToAssetPath(g);
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
@@ -36,26 +39,42 @@ public static class RenderPreview
             {
                 inst = (GameObject)UnityEngine.Object.Instantiate(prefab);
                 int c = inst.GetComponentsInChildren<Renderer>(true).Count(r => r is SkinnedMeshRenderer || r is MeshRenderer);
-                if (c > bestCount) { bestCount = c; best = prefab; }
+                if (c > 0) cands.Add((prefab, prefab.name, c));
             }
             catch { }
             finally { if (inst != null) UnityEngine.Object.DestroyImmediate(inst); }
         }
 
-        // prefabが無ければ、FBX(モデル)を直接代表にする
-        if (best == null)
+        // prefabが無ければ、FBX(モデル)を代表に1個だけ(従来挙動)
+        if (cands.Count == 0)
         {
-            string[] models = AssetDatabase.FindAssets("t:Model", new[] { "Assets" });
-            if (models.Length > 0) best = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(models[0]));
+            var models = AssetDatabase.FindAssets("t:Model", new[] { "Assets" });
+            if (models.Length > 0)
+            {
+                var m = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(models[0]));
+                if (m != null) cands.Add((m, m.name, 0));
+            }
         }
-        if (best == null) { Debug.LogWarning("RenderPreview: no prefab/model"); EditorApplication.Exit(3); return; }
+        if (cands.Count == 0) { Debug.LogWarning("RenderPreview: no prefab/model"); EditorApplication.Exit(3); return; }
+
+        // レンダラ数の多い順 → 上限N個。index0 が代表(=従来のhero)。
+        var chosen = cands.OrderByDescending(c => c.count).ThenBy(c => c.name).Take(MAX_PREFABS).ToList();
 
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
         RenderSettings.ambientLight = new Color(0.5f, 0.5f, 0.55f);
 
-        Debug.Log("RenderPreview: best prefab = " + best.name + " (renderers " + bestCount + ")");
-        RenderOne(best, outDir, "model");
-        Debug.Log("RenderPreview: DONE -> " + outDir);
+        var manifest = new List<string>();
+        for (int i = 0; i < chosen.Count; i++)
+        {
+            var c = chosen[i];
+            Debug.Log("RenderPreview: [" + i + "] " + c.name + " (renderers " + c.count + ")");
+            RenderOne(c.prefab, outDir, "model" + i);
+            // 名前のタブ/改行はマニフェスト区切りと衝突するので除去
+            var safeName = (c.name ?? "").Replace("\t", " ").Replace("\n", " ").Replace("\r", " ");
+            manifest.Add(i + "\t" + safeName + "\t" + c.count);
+        }
+        File.WriteAllText(Path.Combine(outDir, "previews.txt"), string.Join("\n", manifest));
+        Debug.Log("RenderPreview: DONE " + chosen.Count + " prefab(s) -> " + outDir);
         EditorApplication.Exit(0);
     }
 
