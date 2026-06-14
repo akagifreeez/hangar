@@ -106,10 +106,10 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   <div class="ovcard">
     <div class="ovhead">
       <b>🔀 プロジェクト比較</b>
-      <select id="cmpA"></select>
-      <span style="color:#8a8a92">⇔</span>
-      <select id="cmpB"></select>
+      <span id="cmpsel" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 220px"></span>
+      <button id="cmpadd" class="sec" title="比較するプロジェクトを追加(3つ以上も可)">＋追加</button>
       <button id="cmprun">比較</button>
+      <button id="cmpsprawl" class="sec" title="全プロジェクトで複数に散らばっている商品を俯瞰">📊 散らばり</button>
       <button id="cmpclose" class="sec">閉じる</button>
     </div>
     <div id="cmpbody" class="ovbody"></div>
@@ -429,27 +429,54 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     else showError('ドロップできない種類です', ['フォルダ、または .unitypackage をドロップしてください（' + (target.split(/[\\/]/).pop()) + ' はスキャンできません）']);
   });
 
-  // ---- プロジェクト横断比較(compare) ----
+  // ---- プロジェクト横断比較(compare) / 散らばり(sprawl) ----
+  let CMP_PROJECTS = [];
+  const cmpBase = p => (p.split(/[\\/]/).filter(Boolean).pop() || p);
+  function cmpAddSelect(sel){
+    if (!CMP_PROJECTS.length) return;
+    const s = document.createElement('select');
+    s.innerHTML = CMP_PROJECTS.map(p => '<option value="'+esc(p)+'">'+esc(cmpBase(p))+'</option>').join('');
+    s.selectedIndex = Math.min(sel, CMP_PROJECTS.length - 1);
+    $('cmpsel').appendChild(s);
+  }
+  function cmpSelected(){
+    return [...$('cmpsel').querySelectorAll('select')].map(s => s.value).filter((v, i, a) => v && a.indexOf(v) === i);
+  }
   async function openCmp(){
     if (BUSY) { setStatus('処理中です。完了までお待ちください'); return; }
     const cfg = await window.hangar.getConfig();
-    const projects = (cfg && cfg.projectDirs) || [];
-    if (projects.length < 2) { showError('比較には2つ以上のプロジェクトが必要です', ['先に「🎯 プロジェクト検出」で2つ以上のプロジェクトを登録してください']); return; }
-    const base = p => (p.split(/[\\/]/).filter(Boolean).pop() || p);
-    const opts = projects.map(p => '<option value="'+esc(p)+'">'+esc(base(p))+'</option>').join('');
-    $('cmpA').innerHTML = opts; $('cmpB').innerHTML = opts; $('cmpB').selectedIndex = Math.min(1, projects.length - 1);
-    $('cmpbody').innerHTML = '<div class="dinfo">A と B を選んで「比較」を押してください。</div>';
+    CMP_PROJECTS = (cfg && cfg.projectDirs) || [];
+    if (CMP_PROJECTS.length < 2) { showError('比較には2つ以上のプロジェクトが必要です', ['先に「🎯 プロジェクト検出」で2つ以上のプロジェクトを登録してください']); return; }
+    $('cmpsel').innerHTML = ''; cmpAddSelect(0); cmpAddSelect(1);
+    $('cmpbody').innerHTML = '<div class="dinfo">プロジェクトを2つ以上選んで「比較」。「＋追加」で3つ以上、「📊 散らばり」で全体の重複俯瞰。</div>';
     $('cmpov').style.display = 'flex';
   }
   $('cmpbtn').onclick = openCmp;
+  $('cmpadd').onclick = () => cmpAddSelect(Math.min($('cmpsel').children.length, CMP_PROJECTS.length - 1));
   $('cmpclose').onclick = () => { $('cmpov').style.display = 'none'; };
   $('cmprun').onclick = async () => {
-    const a = $('cmpA').value, b = $('cmpB').value;
-    if (!a || !b || a === b) { $('cmpbody').innerHTML = '<div class="orange">違うプロジェクトを2つ選んでください。</div>'; return; }
+    const paths = cmpSelected();
+    if (paths.length < 2) { $('cmpbody').innerHTML = '<div class="orange">違うプロジェクトを2つ以上選んでください。</div>'; return; }
     $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>比較中…</div>';
-    const r = await window.hangar.compare([a, b]);
+    const r = await window.hangar.compare(paths);
     $('cmpbody').innerHTML = renderCompare(r);
   };
+  $('cmpsprawl').onclick = async () => {
+    $('cmpbody').innerHTML = '<div class="dinfo"><span class="spin"></span>散らばりを集計中…</div>';
+    const r = await window.hangar.sprawl();
+    $('cmpbody').innerHTML = renderSprawl(r);
+  };
+  const cmpPink = p => (p.requiresLil||p.requiresPoi) ? ' <span class="purple">〔要'+[p.requiresLil?'lilToon':'',p.requiresPoi?'Poiyomi':''].filter(Boolean).join('+')+'〕</span>' : '';
+  function renderToolingDiff(reg, tg){
+    const labels = {'jp.lilxyzw.liltoon':'lilToon','com.poiyomi.toon':'Poiyomi','com.vrchat.avatars':'VRChat SDK Avatars','com.vrchat.base':'VRChat SDK Base','nadena.dev.modular-avatar':'Modular Avatar'};
+    const pinkIds = {'jp.lilxyzw.liltoon':1,'com.poiyomi.toon':1};
+    const maps = reg.map(p => tg[p.path] || {});
+    const ids = [...new Set(maps.flatMap(m => Object.keys(m)))].filter(id => new Set(maps.map(m => m[id]||'∅')).size > 1).sort((x,y)=>(pinkIds[y]?1:0)-(pinkIds[x]?1:0));
+    if (!ids.length) return '';
+    let h = '<div class="dsec"><h4 class="orange">⚙ シェーダ/SDK差 ('+ids.length+') ＝VPM版違い/欠落（要シェーダ商品は移行時ピンク注意）</h4>';
+    h += ids.map(id=>'<div class="dconf">'+(pinkIds[id]?'<span class="purple">⚠ </span>':'')+esc(labels[id]||id)+'<span class="sub">'+reg.map((p,i)=>(reg.length===2?(i?'B':'A'):(i+1))+':'+esc(maps[i][id]||'無')).join(' / ')+'</span></div>').join('');
+    return h + '</div>';
+  }
   function renderCompare(r){
     if (!r) return '<div class="red">比較に失敗しました（対象が detect --save 済みか確認してください）。</div>';
     const reg = (r.projects||[]).filter(p=>p.registered);
@@ -457,37 +484,44 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     let h = '';
     if (unreg.length) h += '<div class="duncheck">⚠ 未登録のため比較対象外: '+unreg.map(p=>esc(p.name)).join(' , ')+'（先に 🎯 プロジェクト検出）</div>';
     if (reg.length < 2) return h + '<div class="dinfo">登録済みプロジェクトが2つ以上必要です。</div>';
-    const A = reg[0], B = reg[1];
     const has = (p, path) => p.perProject[path];
-    const pink = p => (p.requiresLil||p.requiresPoi) ? ' <span class="purple">〔要'+[p.requiresLil?'lilToon':'',p.requiresPoi?'Poiyomi':''].filter(Boolean).join('+')+'〕</span>' : '';
     const prods = r.products||[];
-    const inA = p=>has(p,A.path), inB = p=>has(p,B.path);
-    const common = prods.filter(p=>inA(p)&&inB(p));
-    const oAraw = prods.filter(p=>inA(p)&&!inB(p));
-    const oBraw = prods.filter(p=>inB(p)&&!inA(p));
-    const aByName = new Map(oAraw.map(p=>[p.fileName,p]));
-    const verNames = new Set(oBraw.filter(p=>aByName.has(p.fileName)).map(p=>p.fileName));
-    const oA = oAraw.filter(p=>!verNames.has(p.fileName));
-    const oB = oBraw.filter(p=>!verNames.has(p.fileName));
-    const list = arr => arr.length ? arr.map(p=>'<div class="dconf">'+esc(p.fileName)+pink(p)+'</div>').join('') : '<div class="dinfo">なし</div>';
-    h += '<div class="dinfo">A = <b>'+esc(A.name)+'</b> ／ B = <b>'+esc(B.name)+'</b></div>';
-    h += '<div class="dsec"><h4 class="green">● 共通 ('+common.length+')</h4>' +
-      (common.length ? common.map(p=>{const a=Math.round(inA(p).pct),b=Math.round(inB(p).pct);const note=Math.abs(a-b)>=10?'<span class="orange"> ⚠ '+(a>b?'B':'A')+' は一部だけ('+(a>b?b:a)+'%)</span>':'';return '<div class="dconf">'+esc(p.fileName)+'<span class="sub">A'+a+'% / B'+b+'%'+note+'</span></div>';}).join('') : '<div class="dinfo">なし</div>') + '</div>';
-    h += '<div class="dsec"><h4 class="orange">◀ A のみ ('+oA.length+') ＝B へ移すなら追加導入</h4>'+list(oA)+'</div>';
-    h += '<div class="dsec"><h4 class="orange">▶ B のみ ('+oB.length+')</h4>'+list(oB)+'</div>';
-    if (verNames.size) h += '<div class="dsec"><h4 class="red">⚠ 版違いの可能性 ('+verNames.size+') ＝同名だが中身が異なる</h4>'+[...verNames].map(n=>'<div class="dconf">'+esc(n)+'<span class="sub">A と B で別の版</span></div>').join('')+'</div>';
-    // シェーダ/SDK差(VPM版違い/欠落)
-    const tg = r.tooling || {};
-    const labels = {'jp.lilxyzw.liltoon':'lilToon','com.poiyomi.toon':'Poiyomi','com.vrchat.avatars':'VRChat SDK Avatars','com.vrchat.base':'VRChat SDK Base','nadena.dev.modular-avatar':'Modular Avatar'};
-    const pinkIds = {'jp.lilxyzw.liltoon':1,'com.poiyomi.toon':1};
-    const ta = tg[A.path] || {}, tb = tg[B.path] || {};
-    const ids = [...new Set([...Object.keys(ta), ...Object.keys(tb)])].filter(id => (ta[id]||'∅') !== (tb[id]||'∅')).sort((x,y)=>(pinkIds[y]?1:0)-(pinkIds[x]?1:0));
-    if (ids.length) {
-      h += '<div class="dsec"><h4 class="orange">⚙ シェーダ/SDK差 ('+ids.length+') ＝VPM版違い/欠落（要シェーダ商品は移行時ピンク注意）</h4>';
-      h += ids.map(id=>'<div class="dconf">'+(pinkIds[id]?'<span class="purple">⚠ </span>':'')+esc(labels[id]||id)+'<span class="sub">A:'+esc(ta[id]||'無')+' / B:'+esc(tb[id]||'無')+'</span></div>').join('');
-      h += '</div>';
+    if (reg.length === 2) {
+      const A = reg[0], B = reg[1];
+      const inA = p=>has(p,A.path), inB = p=>has(p,B.path);
+      const common = prods.filter(p=>inA(p)&&inB(p));
+      const oAraw = prods.filter(p=>inA(p)&&!inB(p)), oBraw = prods.filter(p=>inB(p)&&!inA(p));
+      const aByName = new Map(oAraw.map(p=>[p.fileName,p]));
+      const verNames = new Set(oBraw.filter(p=>aByName.has(p.fileName)).map(p=>p.fileName));
+      const oA = oAraw.filter(p=>!verNames.has(p.fileName)), oB = oBraw.filter(p=>!verNames.has(p.fileName));
+      const list = arr => arr.length ? arr.map(p=>'<div class="dconf">'+esc(p.fileName)+cmpPink(p)+'</div>').join('') : '<div class="dinfo">なし</div>';
+      h += '<div class="dinfo">A = <b>'+esc(A.name)+'</b> ／ B = <b>'+esc(B.name)+'</b></div>';
+      h += '<div class="dsec"><h4 class="green">● 共通 ('+common.length+')</h4>' +
+        (common.length ? common.map(p=>{const a=Math.round(inA(p).pct),b=Math.round(inB(p).pct);const note=Math.abs(a-b)>=10?'<span class="orange"> ⚠ '+(a>b?'B':'A')+' は一部だけ('+(a>b?b:a)+'%)</span>':'';return '<div class="dconf">'+esc(p.fileName)+'<span class="sub">A'+a+'% / B'+b+'%'+note+'</span></div>';}).join('') : '<div class="dinfo">なし</div>') + '</div>';
+      h += '<div class="dsec"><h4 class="orange">◀ A のみ ('+oA.length+') ＝B へ移すなら追加導入</h4>'+list(oA)+'</div>';
+      h += '<div class="dsec"><h4 class="orange">▶ B のみ ('+oB.length+')</h4>'+list(oB)+'</div>';
+      if (verNames.size) h += '<div class="dsec"><h4 class="red">⚠ 版違いの可能性 ('+verNames.size+') ＝同名だが中身が異なる</h4>'+[...verNames].map(n=>'<div class="dconf">'+esc(n)+'<span class="sub">A と B で別の版</span></div>').join('')+'</div>';
+      h += renderToolingDiff(reg, r.tooling || {});
+      return h;
     }
+    // 3プロジェクト以上: 全員/一部/単独 の3段階要約
+    const cntOf = p => reg.filter(pr=>has(p,pr.path)).length;
+    const where = p => reg.map((pr,i)=>has(p,pr.path)?i+1:'').filter(x=>x!=='').join(',');
+    const allN = prods.filter(p=>cntOf(p)===reg.length);
+    const some = prods.filter(p=>{const c=cntOf(p);return c>1&&c<reg.length;});
+    const solo = prods.filter(p=>cntOf(p)===1);
+    h += '<div class="dinfo">'+reg.map((p,i)=>(i+1)+'. <b>'+esc(p.name)+'</b>').join(' ／ ')+'</div>';
+    h += '<div class="dsec"><h4 class="green">● 全員にある ('+allN.length+')</h4>'+(allN.length?allN.map(p=>'<div class="dconf">'+esc(p.fileName)+'</div>').join(''):'<div class="dinfo">なし</div>')+'</div>';
+    h += '<div class="dsec"><h4 class="orange">◐ 一部にある ('+some.length+')</h4>'+(some.length?some.map(p=>'<div class="dconf">'+esc(p.fileName)+'<span class="sub">['+where(p)+']</span></div>').join(''):'<div class="dinfo">なし</div>')+'</div>';
+    h += '<div class="dsec"><h4 class="orange">○ 単独 ('+solo.length+')</h4>'+(solo.length?solo.map(p=>'<div class="dconf">'+esc(p.fileName)+'<span class="sub">['+where(p)+']</span>'+cmpPink(p)+'</div>').join(''):'<div class="dinfo">なし</div>')+'</div>';
+    h += renderToolingDiff(reg, r.tooling || {});
     return h;
+  }
+  function renderSprawl(list){
+    if (!Array.isArray(list) || !list.length) return '<div class="dinfo">2プロジェクト以上に散らばる商品はありません。</div>';
+    let h = '<div class="dinfo">複数プロジェクトに散らばる商品 ('+list.length+') — 多い順</div><div class="dsec">';
+    h += list.map(p=>'<div class="dconf"><b>'+p.projectCount+'proj</b> ・ '+esc(p.name)+(p.copyCount>1?' <span class="orange">物理コピー'+p.copyCount+'</span>':'')+'<span class="sub">→ '+esc((p.projects||[]).join(' , '))+'</span></div>').join('');
+    return h + '</div>';
   }
 
   // 背景クリックでモーダルを閉じる(カード内のクリック/ドラッグは無視するため mousedown の発生元で判定)

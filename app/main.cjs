@@ -195,9 +195,13 @@ ipcMain.handle('diff', (_e, pkg, project) => withJob(async () => {
   const r = await runCliJson(['diff', pkg, '--project', project, '--json']);
   return r.report;   // 失敗時 null（UI 側で原因表示）。直列化で連打/D&Dの多重起動を防ぐ。
 }));
-// プロジェクト横断比較(読み取り専用): compare --json の構造体 {projects, products} をそのまま返す。
+// プロジェクト横断比較(読み取り専用): compare --json の構造体 {projects, products, tooling} をそのまま返す。
 ipcMain.handle('compare', (_e, projects) => withJob(async () => {
   return await runCliJson(['compare', ...projects, '--json']);
+}));
+// 散らばり俯瞰(読み取り専用): sprawl --json の配列をそのまま返す。
+ipcMain.handle('sprawl', () => withJob(async () => {
+  return await runCliJson(['sprawl', '--json']);
 }));
 // D&D 取込でドロップされたパスがフォルダか(=スキャン対象)を判定。ファイル(.zip等)はスキャンに回さない。
 ipcMain.handle('is-directory', (_e, p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });

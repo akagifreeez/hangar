@@ -109,6 +109,20 @@ async function main(): Promise<void> {
         console.log(formatCompareText(full));
         break;
       }
+      case 'sprawl': {
+        // 散らばり俯瞰: 全登録プロジェクト横断で「N個に導入された商品」を容量影響付きで一覧。読み取り専用。
+        const json = args.includes('--json');
+        const minIdx = args.indexOf('--min');
+        const min = minIdx >= 0 ? Math.max(2, parseInt(args[minIdx + 1] ?? '2', 10) || 2) : 2;
+        const prods = cat.dedupedProducts().filter(p => p.projects.length >= min)
+          .sort((a, b) => b.projects.length - a.projects.length || b.rep.size_bytes - a.rep.size_bytes);
+        if (json) {
+          console.log(JSON.stringify(prods.map(p => ({ name: p.rep.file_name, projectCount: p.projects.length, projects: p.projects.map(x => x.name), sizeBytes: p.rep.size_bytes, copyCount: p.copyCount, wastedBytes: p.wastedBytes }))));
+          break;
+        }
+        console.log(formatSprawlText(prods, min));
+        break;
+      }
       case 'diff': {
         // インポート前 競合diff: 取り込み前に「何を上書きするか/足りないシェーダ」を出す。読み取り専用。
         const json = args.includes('--json');
@@ -549,6 +563,21 @@ function formatCompareText(r: CompareResult): string {
     L.push(`\n⚙ シェーダ/SDK差 (${tRowsN.length})`);
     for (const t of tRowsN) L.push(`   ${t.pink ? '⚠ ' : ''}${t.label}   ${t.versions.map((v, i) => `${i + 1}:${v ?? '無'}`).join(' / ')}`);
   }
+  return L.join('\n');
+}
+
+function formatSprawlText(prods: Product[], min: number): string {
+  const L: string[] = [];
+  L.push(`=== 散らばり俯瞰: ${min}プロジェクト以上に導入された商品 (${prods.length})`);
+  if (!prods.length) { L.push('   （該当なし）'); return L.join('\n'); }
+  let logical = 0;
+  for (const p of prods) {
+    logical += p.rep.size_bytes * (p.projects.length - 1);
+    const cp = p.copyCount > 1 ? ` ・物理コピー${p.copyCount}(無駄${mb(p.wastedBytes)})` : '';
+    L.push(`   ${p.projects.length}proj  ${mb(p.rep.size_bytes)}${cp}  ${p.rep.file_name}`);
+    L.push(`        → ${p.projects.map(x => x.name).join(' , ')}`);
+  }
+  L.push(`\n論理重複(同一商品が複数プロジェクトに導入)の概算: 約${mb(logical)}`);
   return L.join('\n');
 }
 
