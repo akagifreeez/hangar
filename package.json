@@ -1,6 +1,6 @@
 {
   "name": "hangar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "VRChat .unitypackage カタログ + GUID遡及検出 + 忠実プレビュー (VRChat非公式・ローカル限定)",
