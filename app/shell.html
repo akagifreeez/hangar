@@ -157,6 +157,11 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   function showEmptyMsg(msg){ $('emptymsg').textContent = msg; $('emptymsg').style.display='block'; $('empty').style.display='flex'; $('cat').style.display='none'; }
   function showCatalog(url){ CAT_URL = url; $('empty').style.display='none'; $('cat').style.display='block'; reload(); }
   const reload = () => { if (CAT_URL) $('cat').src = CAT_URL + (CAT_URL.includes('?')?'&':'?') + 'v=' + Date.now() + (pendingOpenSig ? ('#open=' + encodeURIComponent(pendingOpenSig)) : ''); };
+  // カタログ(iframe)へ3D生成の可否(caps)を渡し、Unity/lilToon未検出なら🎬を抑制(要Unity表示)。load毎に再送。
+  async function postCapsToCatalog(){
+    try { const caps = await window.hangar.capabilities(); const w = $('cat').contentWindow; if (w) w.postMessage({ type: 'hangar-caps', canRender: !!(caps && caps.canRender) }, '*'); } catch {}
+  }
+  $('cat').addEventListener('load', postCapsToCatalog);
 
   window.hangar.onStatus(m => {
     // 進捗行 [i/total] はバーに反映(statusを流し続けない)。行頭アンカーで、ファイル名中の[1/2]等の誤検知を防ぐ。

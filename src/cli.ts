@@ -703,6 +703,9 @@ header .sub{color:#888;font-size:12px}
 .genbtn:hover{background:#5a78ff}
 .genbtn-d{background:#4a6cf7;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer;margin-left:10px}
 .genbtn-d:hover{background:#5a78ff}
+body.no-render .genbtn{opacity:.32;filter:grayscale(1)}
+body.no-render .genbtn-d{opacity:.6;filter:grayscale(.7)}
+body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-size:11px;opacity:.95;margin-left:4px}
 .thumb{aspect-ratio:1/1;background:#0e0e12;display:flex;align-items:center;justify-content:center;position:relative}
 .catb{position:absolute;top:6px;left:6px;font-size:11px;padding:2px 7px;border-radius:6px;font-weight:600;z-index:2}
 .cat-model{background:#234a3ae6;color:#9ae7c2}.cat-tool{background:#4a3a23e6;color:#e7c89a}
@@ -796,6 +799,7 @@ function showGrid(){ detail.style.display='none'; grid.style.display='grid'; CUR
 function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); saveState(); }
 // 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
 function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig: DATA[i].sig, name: DATA[i].name}, '*'); }catch(e){} }
+addEventListener('message',function(e){var m=e.data;if(m&&m.type==='hangar-caps'){document.body.classList.toggle('no-render', m.canRender===false);}});
 grid.innerHTML =DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
 const cards = [...grid.children];
 function applyFilter(){
