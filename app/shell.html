@@ -560,7 +560,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     if (!r) return '<div class="red">比較に失敗しました（対象が detect --save 済みか確認してください）。</div>';
     const reg = (r.projects||[]).filter(p=>p.registered);
     const unreg = (r.projects||[]).filter(p=>!p.registered);
-    let h = '';
+    let h = '<div class="sub" style="opacity:.6;font-size:11px">[診断] projects='+((r.projects||[]).length)+' / registered='+reg.length+' / products='+((r.products||[]).length)+'</div>';
     if (unreg.length) h += '<div class="duncheck">⚠ 未登録のため比較対象外: '+unreg.map(p=>esc(p.name)).join(' , ')+'（先に 🎯 プロジェクト検出）</div>';
     if (reg.length < 2) {
       const bad = (r.projects||[]).filter(p=>!p.registered).map(p=>esc(p.name||p.path));
