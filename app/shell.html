@@ -53,13 +53,15 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   <h1>Hangar</h1>
   <button id="scan" title="ライブラリ(BOOTH等の保存先)をスキャン　(Ctrl+O)">📁 ライブラリをスキャン</button>
   <button id="detect" class="sec">🎯 プロジェクト検出</button>
-  <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む　(F5)">🔄 再スキャン</button>
-  <span class="divider"></span>
   <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック　(Ctrl+D)">📦 取り込み前チェック</button>
-  <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
-  <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
-  <span class="divider"></span>
-  <button id="cmpbtn" class="sec" title="登録済みプロジェクトを2つ選んで導入商品を突き合わせ(共通/Aのみ/Bのみ・版違い・要シェーダ)">🔀 プロジェクト比較</button>
+  <button id="toolsbtn" class="sec" title="詳しい人向けツール（再スキャン・テンプレ・プロジェクト比較）">🛠 ツール ▾</button>
+  <span id="toolsgrp" style="display:none">
+    <span class="divider"></span>
+    <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む　(F5)">🔄 再スキャン</button>
+    <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
+    <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
+    <button id="cmpbtn" class="sec" title="登録済みプロジェクトを2つ選んで導入商品を突き合わせ(共通/Aのみ/Bのみ・版違い・要シェーダ)">🔀 プロジェクト比較</button>
+  </span>
   <span class="tag">VRChat非公式・ローカル限定</span>
   <span id="status">準備完了</span>
 </div>
@@ -552,6 +554,14 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); $('diffbtn').onclick(); return; }
     if (e.key === 'F5') { e.preventDefault(); $('rescan').onclick(); return; }
   });
+
+  // 段階的開示: 上級ツール(再スキャン/テンプレ/比較)は「🛠 ツール」で開閉。初回は畳んでおく。
+  $('toolsbtn').onclick = () => {
+    const g = $('toolsgrp');
+    const open = g.style.display !== 'contents';
+    g.style.display = open ? 'contents' : 'none';
+    $('toolsbtn').textContent = open ? '🛠 ツール ▴' : '🛠 ツール ▾';
+  };
 
   refreshCatalog();
 </script></body></html>
