@@ -103,7 +103,18 @@ async function main(): Promise<void> {
         for (const pr of result.projects) if (pr.registered) {
           tooling[pr.path] = Object.fromEntries(readVpmTooling(pr.path).tooling.map(t => [t.id, t.version ?? '']));
         }
-        const full: CompareResult = { ...result, tooling };
+        // Phase4: 移行ギャップ(2プロジェクト時)。「A のみ」商品にライブラリ現物(file_path)の有無を付与。
+        let migrate: CompareResult['migrate'];
+        const regp = result.projects.filter(p => p.registered);
+        if (regp.length === 2) {
+          const A = regp[0]!, B = regp[1]!;
+          const pathById = new Map(cat.allPackages().map(r => [r.id, r.file_path]));
+          migrate = result.products.filter(p => p.perProject[A.path] && !p.perProject[B.path]).map(p => {
+            const fp = pathById.get(p.perProject[A.path]!.pkgId) ?? '';
+            return { fileName: p.fileName, libAvailable: !!fp && existsSync(fp), requiresLil: p.requiresLil, requiresPoi: p.requiresPoi };
+          });
+        }
+        const full: CompareResult = { ...result, tooling, migrate };
         if (htmlCmpOut) { writeFileSync(htmlCmpOut, formatCompareHtml(full), 'utf8'); console.log(`レポート(HTML): ${htmlCmpOut}`); }
         if (json) { console.log(JSON.stringify(full)); break; }
         console.log(formatCompareText(full));
@@ -476,6 +487,7 @@ type CompareResult = {
   projects: { path: string; name: string; registered: boolean }[];
   products: CompareProduct[];
   tooling?: Record<string, Record<string, string>>;   // path -> {vpm id: version}
+  migrate?: { fileName: string; libAvailable: boolean; requiresLil: boolean; requiresPoi: boolean }[];  // A→B移行ギャップ(2proj時)
 };
 
 const PINK_TOOL_IDS = new Set(['jp.lilxyzw.liltoon', 'com.poiyomi.toon']);
@@ -541,6 +553,13 @@ function formatCompareText(r: CompareResult): string {
       L.push(`\n⚙ シェーダ/SDK差 (${tRows.length})   ＝VPM版違い/欠落（要シェーダ商品は移行時ピンク注意）`);
       for (const t of tRows) L.push(`   ${t.pink ? '⚠ ' : ''}${t.label}   A:${t.versions[0] ?? '無'} / B:${t.versions[1] ?? '無'}`);
     }
+    if (r.migrate && r.migrate.length) {
+      L.push(`\n🚚 移行ギャップ A→B (${r.migrate.length})   ＝B を A に揃えるなら追加導入`);
+      for (const m of r.migrate) {
+        const sh = (m.requiresLil || m.requiresPoi) ? ` ・要${[m.requiresLil ? 'lilToon' : '', m.requiresPoi ? 'Poiyomi' : ''].filter(Boolean).join('+')}` : '';
+        L.push(`   ${m.libAvailable ? '⟳ 再インポート可      ' : '✗ 入手要(ライブラリに無) '}${m.fileName}${sh}`);
+      }
+    }
     return L.join('\n');
   }
 
@@ -604,6 +623,7 @@ function formatCompareHtml(r: CompareResult): string {
     if (verNames.size) body += sec('r', '⚠ 版違いの可能性', [...verNames].map(n => `<div class="row">${e(n)} <span class="muted">A と B で別の版</span></div>`));
     const tRows = toolingRows([A.path, B.path], r.tooling);
     if (tRows.length) body += sec('r', '⚙ シェーダ/SDK差', tRows.map(t => `<div class="row">${t.pink ? '⚠ ' : ''}${e(t.label)} <span class="muted">A:${e(t.versions[0] ?? '無')} / B:${e(t.versions[1] ?? '無')}</span></div>`));
+    if (r.migrate && r.migrate.length) body += sec('o', '🚚 移行ギャップ A→B（B を A に揃えるなら追加導入）', r.migrate.map(m => `<div class="row">${m.libAvailable ? '⟳ <span class="muted">再インポート可</span>' : '✗ <span class="r">入手要</span>'} ${e(m.fileName)}${(m.requiresLil || m.requiresPoi) ? ` <span class="pink">〔要${[m.requiresLil ? 'lilToon' : '', m.requiresPoi ? 'Poiyomi' : ''].filter(Boolean).join('+')}〕</span>` : ''}</div>`));
   } else {
     body += `<div class="head">${ps.length} プロジェクト: ${ps.map((p, i) => `${i + 1}.${e(p.name)}`).join(' / ')}</div>`;
     const cntOf = (p: CompareProduct) => ps.filter(pr => has(p, pr.path)).length;

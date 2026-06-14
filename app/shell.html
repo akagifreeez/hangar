@@ -502,6 +502,11 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       h += '<div class="dsec"><h4 class="orange">▶ B のみ ('+oB.length+')</h4>'+list(oB)+'</div>';
       if (verNames.size) h += '<div class="dsec"><h4 class="red">⚠ 版違いの可能性 ('+verNames.size+') ＝同名だが中身が異なる</h4>'+[...verNames].map(n=>'<div class="dconf">'+esc(n)+'<span class="sub">A と B で別の版</span></div>').join('')+'</div>';
       h += renderToolingDiff(reg, r.tooling || {});
+      if (r.migrate && r.migrate.length) {
+        h += '<div class="dsec"><h4 class="orange">🚚 移行ギャップ A→B ('+r.migrate.length+') ＝B を A に揃えるなら追加導入</h4>';
+        h += r.migrate.map(m=>'<div class="dconf">'+(m.libAvailable?'<span class="green">⟳ 再インポート可</span>':'<span class="red">✗ 入手要</span>')+' '+esc(m.fileName)+((m.requiresLil||m.requiresPoi)?' <span class="purple">〔要'+[m.requiresLil?'lilToon':'',m.requiresPoi?'Poiyomi':''].filter(Boolean).join('+')+'〕</span>':'')+'</div>').join('');
+        h += '</div>';
+      }
       return h;
     }
     // 3プロジェクト以上: 全員/一部/単独 の3段階要約
