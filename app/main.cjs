@@ -293,6 +293,20 @@ ipcMain.handle('restore-template', async (_e, templateDir, projectDir, force) =>
   if (force) args.push('--force');
   return await runCliJson(args);
 });
+// AvatarExplorer/KonoAsset 書出(ItemsData.json)を取込。--scan で実体(.unitypackage)も解析。完了後カタログ再生成。
+ipcMain.handle('import-ae', (_e, dir, scan) => withJob(async () => {
+  const args = ['import-ae', dir];
+  if (scan) args.push('--scan');
+  const { code, tail } = await runCli(args);
+  if (code === 0) await regen();
+  return { ok: code === 0, code, tail };
+}));
+// 保存済みBOOTH商品の公開メタを一括補完(鍵不要・DLしない)。AvatarExplorer取込/プレースホルダを実メタで上書き。
+ipcMain.handle('booth-enrich-all', () => withJob(async () => {
+  const { code, tail } = await runCli(['booth-enrich', '--all']);
+  if (code === 0) await regen();
+  return { ok: code === 0, code, tail };
+}));
 // 3D生成(方式A)が使えるか= Unity + lilToon が見つかるか
 ipcMain.handle('render-capabilities', async () => {
   const r = await runCliJson(['caps']);

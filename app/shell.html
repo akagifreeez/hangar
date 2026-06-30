@@ -66,6 +66,8 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
     <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
     <button id="cmpbtn" class="sec" title="登録済みプロジェクトを2つ選んで導入商品を突き合わせ(共通/Aのみ/Bのみ・版違い・要シェーダ)">🔀 プロジェクト比較</button>
+    <button id="importae" class="sec" title="AvatarExplorer / KonoAsset の書き出しフォルダ(ItemsData.json)を取り込み、BOOTHメタ付きでカタログに統合（移行用）">📥 他ツールから取込</button>
+    <button id="boothmeta" class="sec" title="保存済みのBOOTH商品の公開情報(作者・種別・タグ)を補完。鍵不要・ダウンロードはしません">🛒 BOOTHメタ補完</button>
   </span>
   <span class="tag">VRChat非公式・ローカル限定</span>
   <span id="status">準備完了</span>
@@ -74,7 +76,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
 <div id="empty">
   <h2>ようこそ Hangar へ</h2>
   <p>VRChatの <span class="kbd">.unitypackage</span> を <b>展開せず</b>に棚卸し・プレビュー・導入追跡するツールです。<br>
-  すべて<b>ローカルのみ・読み取り専用</b>で動作し、外部送信・スクレイピング・改変は一切しません。</p>
+  <b>ローカルで読み取り専用</b>に動作し、購入した .unitypackage を書き換えたり送信したりしません。表示用に <b>公開BOOTHのサムネ・商品情報だけ</b>を取得します（ログイン不要）。</p>
   <div class="steps"><span>① 保存フォルダを選ぶ</span><span>② サムネ一覧で棚卸し</span><span>③ プロジェクト検出で導入逆引き</span></div>
   <p id="emptymsg"></p>
   <button id="scan2" class="big">📁 まずライブラリ(BOOTH等の保存先)をスキャン</button>
@@ -146,7 +148,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
         ・<b>lilToon / Poiyomi</b> … 定番のアバター用シェーダ。版が混ざる/欠けるとピンク化の原因に。<br>
         ・<b>GUID</b> … ファイル1つ1つに付く固有番号。Hangarはこれを突き合わせて「どの商品がどこに入ったか」を判定。
       </div>
-      <p class="dinfo" style="margin-top:12px">すべて<b>ローカル・読み取り専用</b>。購入物を書き換えたり外部送信することはありません。詳しい人向けの機能（テンプレ・プロジェクト比較）は「🛠 ツール」にあります。</p>
+      <p class="dinfo" style="margin-top:12px"><b>ローカルで読み取り専用</b>。購入物を書き換えることはありません。表示用に公開BOOTHのサムネ・商品情報のみ取得します（購入ファイルは送信しません）。詳しい人向けの機能（テンプレ・プロジェクト比較）は「🛠 ツール」にあります。</p>
     </div>
   </div>
 </div>
@@ -163,7 +165,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   let LAST_RESTORE = null;
   let pendingOpenSig = null;   // 3D生成完了→カタログ再読込時に、その商品の詳細を自動で開く(#open=sig)
 
-  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl','cmpbtn'];
+  const ACTION_BTNS = ['scan','scan2','detect','rescan','diffbtn','savetmpl','restoretmpl','cmpbtn','importae','boothmeta'];
   let scanFails = 0;
   function resetProg(){ scanFails = 0; $('progbar').style.width = '0'; $('progtxt').textContent = ''; $('prog').style.display = 'none'; }
   function setProg(done, total, label){
@@ -452,6 +454,28 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       else { LAST_RESTORE = { tmpl, proj }; setStatus('テンプレ復元 完了'); showTmpl('テンプレ復元 完了', renderRestore(r.report || {})); }
     } finally { setBusy(false); }
   }
+
+  // ---- 他ツールから取込(AvatarExplorer/KonoAsset) / BOOTHメタ補完 ----
+  $('importae').onclick = async () => {
+    if (BUSY) return;
+    const dir = await window.hangar.pickFolder({ title: 'AvatarExplorer / KonoAsset の書き出しフォルダ(ItemsData.json を含む)を選択' });
+    if (!dir.length) return;
+    setBusy(true, '他ツールから取込中: ' + dir[0]); clearError();
+    try {
+      const r = await window.hangar.importAe(dir[0], true);
+      if (!r || !r.ok) showError('取込に失敗しました', (r && r.tail) || ['ItemsData.json を含むフォルダか確認してください']);
+      else setStatus('他ツールから取込 完了（カタログを更新しました）');
+    } finally { setBusy(false); }
+  };
+  $('boothmeta').onclick = async () => {
+    if (BUSY) return;
+    setBusy(true, 'BOOTHメタ補完中（公開情報を取得）…'); clearError();
+    try {
+      const r = await window.hangar.boothEnrichAll();
+      if (!r || !r.ok) showError('BOOTHメタ補完に失敗しました', (r && r.tail) || ['保存済みのBOOTH商品が無いか、通信に失敗しました']);
+      else setStatus('BOOTHメタ補完 完了（カタログを更新しました）');
+    } finally { setBusy(false); }
+  };
 
   // ドラッグ&ドロップ取込: .unitypackage→取り込み前チェック / フォルダ→スキャン。
   // 枠表示は dragover を監視するwatchdog方式(ネスト/iframeでカウンタがズレて枠が残る問題を回避)。

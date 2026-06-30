@@ -8,7 +8,7 @@ import { guidSetHash } from './sig.js';
 import { Catalog, type PackageRow, type Product, type CompareProduct, type BoothItemRow } from './db.js';
 import { scanDir, canonical } from './scan.js';
 import { parsePackage } from './unitypackage.js';
-import { fetchBoothItem, BoothFetchError, ASSET_TYPE_LABEL, type AssetType } from './booth.js';
+import { fetchBoothItem, downloadImage, BoothFetchError, ASSET_TYPE_LABEL, type AssetType } from './booth.js';
 import { importAvatarExplorer, formatAeImportText } from './avatarexplorer.js';
 import { projectGuids, matchPackages, expandProjectRoots } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
@@ -252,6 +252,10 @@ async function main(): Promise<void> {
         const out = args[0] ?? 'hangar-catalog.html';
         const products = cat.dedupedProducts();
         const outDir = dirname(out);
+        // ファイルパス → BOOTHメタ のマップ。商品の物理コピーのいずれかにリンクがあれば拾う。通信はしない(保存済みメタのみ)。
+        const boothItemsById = new Map(cat.allBoothItems().map(b => [b.booth_item_id, b]));
+        const boothByPath = new Map<string, BoothItemRow>();
+        for (const lk of cat.allBoothLinks()) { const bi = boothItemsById.get(lk.booth_item_id); if (bi) boothByPath.set(lk.file_path, bi); }
         // 版グループ: ファイル名から版サフィックス(_v1.2 / .1.0 等)を除いた基底名で束ね、中身(sig)が違うものを「別の版」とみなす
         const verBase = (name: string) => name.replace(/\.unitypackage$/i, '').replace(/[ _\-]*v?\d+([._]\d+)*$/i, '').toLowerCase().trim();
         const byBase = new Map<string, Product[]>();
@@ -283,11 +287,20 @@ async function main(): Promise<void> {
               } catch { /* previews.json壊れ等は無視 */ }
             }
           }
-          const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : '', `cat-${prod.category}`].filter(Boolean).join(' ');
+          // この商品にBOOTHメタが紐づくか(コピーのいずれか)
+          const boothRow = prod.copies.map(c => boothByPath.get(c)).find(Boolean) ?? null;
+          const bc = boothRow ? boothCardOf(boothRow) : null;
+          const tags = [r.requires_poiyomi ? 'poiyomi' : '', r.requires_liltoon ? 'liltoon' : '', r.has_locked ? 'locked' : '', prod.projects.length ? 'installed' : 'notinstalled', prod.copyCount > 1 ? 'dup' : '', bc ? 'booth' : '', `cat-${prod.category}`].filter(Boolean).join(' ');
           // tags/category は固定語彙だが、data-tags 属性へ素で埋めるため念のためエスケープ(DOM注入の多層防御)。
           const sibs = (byBase.get(verBase(r.file_name)) || []).filter(o => o.sig !== prod.sig);
           const versions = sibs.map(o => ({ name: o.rep.file_name, installed: o.projects.length > 0 }));
-          return { card: renderCard(prod, cover), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions), name: r.file_name, tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
+          // カード画像のフォールバック: BOOTHサムネ(キャッシュfile://) → 忠実3D hero → preview → 種別プレースホルダ
+          const boothThumbRel = bc ? findCachedThumbRel(cacheDir, outDir, bc.id) : '';
+          let cardImg = '', imgKind = '';
+          if (boothThumbRel) { cardImg = boothThumbRel; imgKind = 'booth'; }
+          else if (heroUri) { cardImg = heroUri; imgKind = 'local'; }
+          else if (cover) { cardImg = cover; imgKind = 'local'; }
+          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
         });
         writeFileSync(out, renderApp(data, products.length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -434,21 +447,29 @@ async function main(): Promise<void> {
       }
       case 'booth-enrich': {
         // BOOTH公開メタ(booth.pm/ja/items/<id>.json)を取得し booth_items に保存。鍵不要・読取専用・DLしない。
-        const ids = args.filter(a => !a.startsWith('--')).map(a => parseInt(a, 10)).filter(n => Number.isFinite(n));
-        if (!ids.length) return fail('usage: booth-enrich <itemId> [itemId...]   例: booth-enrich 8050793');
-        let ok = 0, ng = 0;
+        // --all: 保存済みの全 booth_item を再取得(AvatarExplorer取込やプレースホルダを公開メタで上書き補完)。
+        const all = args.includes('--all');
+        let ids = args.filter(a => !a.startsWith('--')).map(a => parseInt(a, 10)).filter(n => Number.isFinite(n));
+        if (all) ids = [...new Set([...ids, ...cat.allBoothItems().map(b => b.booth_item_id)])];
+        if (!ids.length) return fail('usage: booth-enrich <itemId...> | booth-enrich --all   例: booth-enrich 8050793');
+        let ok = 0, ng = 0, thumbOk = 0;
         for (const id of ids) {
           try {
             const m = await fetchBoothItem(id);
             cat.upsertBoothItem(m, 'booth-api');
             ok++;
+            // サムネを1回だけローカルへキャッシュ(catalogが実画像を表示できるように)。
+            if (m.thumbnailUrl) {
+              const dest = cachedThumbPath(cacheDir, id, m.thumbnailUrl);
+              if (!existsSync(dest) && await downloadImage(m.thumbnailUrl, dest)) thumbOk++;
+            }
             console.log(`  ✓ ${id}  ${m.name}  〔${ASSET_TYPE_LABEL[m.assetType]}〕  by ${m.creator || '?'}${m.adult ? '  (R-18)' : ''}`);
           } catch (e) {
             ng++;
             console.error(`  ✗ ${id}  ${e instanceof BoothFetchError ? e.message : (e instanceof Error ? e.message : String(e))}`);
           }
         }
-        console.log(`\nBOOTHメタ: ${ok} 件保存${ng ? ` / ${ng} 件失敗` : ''}（DB: ${dbPath}）`);
+        console.log(`\nBOOTHメタ: ${ok} 件保存${thumbOk ? ` / サムネ ${thumbOk} 件取得` : ''}${ng ? ` / ${ng} 件失敗` : ''}（DB: ${dbPath}）`);
         if (ng && !ok) process.exitCode = 1;
         break;
       }
@@ -471,6 +492,15 @@ async function main(): Promise<void> {
           console.log(`  ${r.booth_item_id}  ${r.name}  〔${t}〕  by ${r.creator ?? '?'}  [${r.source}]`);
         }
         console.log(`\n保存済み ${rows.length} 件`);
+        break;
+      }
+      case 'booth-thumbs': {
+        // 保存済みBOOTH商品のサムネをローカルへキャッシュ(skip-if-exists)。catalogが実画像を表示できる。鍵不要・公開CDN。
+        const items = cat.allBoothItems().filter(b => b.thumbnail_url);
+        if (!items.length) { console.log('(サムネ対象なし — 先に booth-enrich でメタを取得してください)'); break; }
+        console.log(`BOOTHサムネをキャッシュ中… (${items.length} 件対象)`);
+        const r = await cacheBoothThumbs(items, cacheDir);
+        console.log(`サムネ: ${r.ok} 取得 / ${r.skip} 既存 / ${r.fail} 失敗 → ${join(cacheDir, 'booth-thumbs')}`);
         break;
       }
       case 'import-booth': {
@@ -547,7 +577,8 @@ async function main(): Promise<void> {
         console.log('  list-projects / prune-projects   登録プロジェクト一覧 / 不正登録(不在・Assets無し)の掃除');
         console.log('  installs                         パッケージ→導入先一覧（重複導入警告）');
         console.log('  catalog [out.html]               カタログ(クリックで詳細: 中身/プレビュー/導入台帳)を生成');
-        console.log('  booth-enrich <itemId...>         BOOTH公開メタを取得して保存(鍵不要・DLしない)');
+        console.log('  booth-enrich <itemId...>         BOOTH公開メタ＋サムネを取得して保存(鍵不要・購入物はDLしない)');
+        console.log('  booth-thumbs                     保存済みBOOTH商品のサムネをローカルにキャッシュ(catalogで実画像表示)');
         console.log('  booth-info [<itemId>]            保存済みBOOTHメタの表示(一覧/詳細)');
         console.log('  import-booth <path> --id <bid>   DL済みファイル+booth idを取込(hangar://受け口の実体)');
         console.log('  import-ae <dir> [--scan]         AvatarExplorer/KonoAsset書出(ItemsData.json)を取込');
@@ -606,6 +637,62 @@ function formatBoothInfo(r: BoothItemRow, cat: Catalog): string {
     for (const f of files) L.push(`    ・${f.filename ?? f.file_path}`);
   }
   return L.join('\n');
+}
+
+// カタログ描画用に BOOTHメタを正規化。プレースホルダ(source=manual・名前が "(BOOTH …)")は薄く扱う。
+export interface BoothCard {
+  id: number; name: string; creator: string; typeLabel: string;
+  itemUrl: string | null; tags: string[]; publishedAt: number | null; source: string; placeholder: boolean;
+  thumbnailUrl: string | null; imageUrls: string[]; adult: boolean;
+}
+function boothCardOf(r: BoothItemRow): BoothCard {
+  let tags: string[] = [];
+  try { tags = r.tags_json ? JSON.parse(r.tags_json) as string[] : []; } catch { /* 壊れ無視 */ }
+  let imageUrls: string[] = [];
+  try { imageUrls = r.image_urls_json ? JSON.parse(r.image_urls_json) as string[] : []; } catch { /* 壊れ無視 */ }
+  return {
+    id: r.booth_item_id,
+    name: r.name,
+    creator: r.creator ?? '',
+    typeLabel: ASSET_TYPE_LABEL[(r.asset_type ?? 'other') as AssetType] ?? (r.asset_type ?? '?'),
+    itemUrl: r.item_url,
+    tags,
+    publishedAt: r.published_at,
+    source: r.source ?? '',
+    placeholder: (r.source === 'manual') || /^\(BOOTH \d+\)$/.test(r.name),
+    thumbnailUrl: r.thumbnail_url,
+    imageUrls,
+    adult: !!r.adult,
+  };
+}
+
+// BOOTHサムネのローカルキャッシュ: <cacheDir>/booth-thumbs/<id>.<ext>。catalog は file:// 相対参照する(CSP不要)。
+function thumbExt(url: string): string {
+  const m = /\.(jpe?g|png|webp|gif)(?:[?#]|$)/i.exec(url);
+  const e = m?.[1];
+  return e ? e.toLowerCase().replace('jpeg', 'jpg') : 'jpg';
+}
+function cachedThumbPath(cacheDir: string, id: number, url: string): string {
+  return join(cacheDir, 'booth-thumbs', `${id}.${thumbExt(url)}`);
+}
+// 既にキャッシュ済みサムネがあれば catalog 出力先からの相対 file:// パスを返す(無ければ空)。
+function findCachedThumbRel(cacheDir: string, outDir: string, id: number): string {
+  for (const ext of ['jpg', 'png', 'webp', 'gif']) {
+    const p = join(cacheDir, 'booth-thumbs', `${id}.${ext}`);
+    if (existsSync(p)) return relative(outDir, p).replace(/\\/g, '/');
+  }
+  return '';
+}
+// 指定 booth_items のサムネを順次(=礼儀正しく)ダウンロード。skip-if-exists。
+async function cacheBoothThumbs(items: BoothItemRow[], cacheDir: string): Promise<{ ok: number; skip: number; fail: number }> {
+  let ok = 0, skip = 0, fail = 0;
+  for (const b of items) {
+    if (!b.thumbnail_url) continue;
+    const dest = cachedThumbPath(cacheDir, b.booth_item_id, b.thumbnail_url);
+    if (existsSync(dest)) { skip++; continue; }
+    if (await downloadImage(b.thumbnail_url, dest)) ok++; else fail++;
+  }
+  return { ok, skip, fail };
 }
 
 // ---------- カタログ描画 ----------
@@ -824,16 +911,26 @@ function formatCompareHtml(r: CompareResult): string {
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>プロジェクト比較</title><style>${style}</style></head><body><h1>🔀 プロジェクト比較レポート</h1>${body}<footer style="margin-top:24px;color:#6a6a72;font-size:12px">Hangar — ローカル生成・パス/商品名を含みます（共有時は注意）。</footer></body></html>`;
 }
 
-function renderCard(p: Product, cover: string): string {
+// 画像: imgKind='booth'(キャッシュ済BOOTHサムネ・object-fit:cover) / 'local'(preview/忠実3D・contain) / ''(無=プレースホルダ)。
+// フォールバック解決は呼び出し側(catalog data-map)。R-18(booth.adult)は blur＋タップ表示でポートフォリオ誤露出を防ぐ。
+function renderCard(p: Product, imgSrc: string, imgKind: string, booth: BoothCard | null = null): string {
   const r = p.rep;
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}・無駄${mb(p.wastedBytes)}</span>` : '';
   const badge = p.projects.length ? `<div class="cb">導入 ${p.projects.length}プロジェクト</div>` : `<div class="cb none">未導入</div>`;
-  const thumb = cover ? `<img src="${cover}" loading="lazy">` : `<div class="noimg">no preview</div>`;
+  const adult = !!(booth && booth.adult);
+  const cls = [imgKind === 'booth' ? 'cover' : '', adult ? 'nsfw' : ''].filter(Boolean).join(' ');
+  const thumb = imgSrc
+    ? `<img src="${imgSrc}" loading="lazy"${cls ? ` class="${cls}"` : ''}>` +
+      (adult ? `<button class="nsfwtag" title="R-18 — クリックで表示" onclick="event.stopPropagation();hangarReveal(this)">🔞 タップで表示</button>` : '')
+    : `<div class="ph cat-${esc(p.category)}"><span class="phn">${esc(r.file_name.replace(/\.unitypackage$/i, '').slice(0, 2) || '?')}</span><span class="phl">画像準備中</span></div>`;
+  const boothLine = booth
+    ? `<div class="booth" title="BOOTH ${booth.id}${booth.placeholder ? '（メタ未取得）' : ''}">🛒 ${esc(booth.creator || 'BOOTH')}${booth.creator ? ' ・ ' : ''}${esc(booth.typeLabel)}</div>`
+    : '';
   return `<div class="thumb">${catBadge(p.category)}${thumb}</div><div class="cbody"><div class="name">${esc(r.file_name)} ${dup}</div>` +
-    `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${badge}</div>`;
+    `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${boothLine}${badge}</div>`;
 }
 
-function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = []): string {
+function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = [], booth: BoothCard | null = null): string {
   const r = p.rep;
   const kinds = JSON.parse(r.kind_breakdown) as Record<string, number>;
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
@@ -871,8 +968,21 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
       versions.map(v => `<div class="cp">${esc(v.name)}${v.installed ? ' <span class="chip">導入中</span>' : ''}</div>`).join('') +
       `<div class="none" style="margin-top:6px">同名/類似名で中身(GUID)が違う＝更新版や別バリエーションの可能性。「📦 取り込み前チェック」でどれを入れるべきか確認できます。</div></div>`
     : '';
+  // BOOTH商品情報(紐付けがあれば)。通信せず保存済みメタのみ。「BOOTHで開く」は外部ブラウザへ(setWindowOpenHandler経由)。
+  const boothSec = booth
+    ? `<h3>🛒 BOOTH 商品情報</h3><div class="boothinfo">` +
+      `<div class="brow"><span class="bk">商品名</span> ${esc(booth.name)}</div>` +
+      (booth.creator ? `<div class="brow"><span class="bk">作者</span> ${esc(booth.creator)}</div>` : '') +
+      `<div class="brow"><span class="bk">種別</span> ${esc(booth.typeLabel)}</div>` +
+      (booth.publishedAt ? `<div class="brow"><span class="bk">公開</span> ${new Date(booth.publishedAt).toISOString().slice(0, 10)}</div>` : '') +
+      (booth.tags.length ? `<div class="brow"><span class="bk">タグ</span> ${booth.tags.slice(0, 12).map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : '') +
+      (booth.itemUrl ? `<div class="brow"><a class="booth-open" href="${esc(booth.itemUrl)}" target="_blank" rel="noopener">BOOTHで開く ↗</a></div>` : '') +
+      `<div class="bnote">取得元: ${esc(booth.source)}${booth.placeholder ? ' ・ メタ未取得（「🛒 BOOTHメタ補完」で公開情報を取得できます）' : ''}</div>` +
+      `</div>`
+    : '';
   return `<div class="dhead">${hero ? `<img class="dhero" src="${hero}">` : ''}<div><h2>${esc(r.file_name)} ${dup}</h2>` +
     `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}<div class="chips">${chips}</div></div></div>` +
+    boothSec +
     faithful +
     `<h3>導入先（取り込み後の追跡）</h3>${inst}` +
     copies + verSec +
@@ -907,6 +1017,13 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .cat-animation{background:#3a2a4ae6;color:#c3b6ff}.cat-material{background:#23354ae6;color:#9ac2e7}.cat-other{background:#2a2a32e6;color:#9a9aa2}
 .dhead .catb{position:static;display:inline-block}
 .thumb img{width:100%;height:100%;object-fit:contain}
+.thumb img.cover{object-fit:cover}
+.thumb img.nsfw{filter:blur(22px) brightness(.82)}
+.thumb img.nsfw.revealed{filter:none}
+.nsfwtag{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#000000b0;color:#fff;border:1px solid #ffffff55;border-radius:8px;padding:6px 11px;font-size:12px;cursor:pointer;z-index:3}
+.ph{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+.ph .phn{font-size:30px;font-weight:800;opacity:.55;line-height:1}
+.ph .phl{font-size:11px;opacity:.6}
 .noimg{color:#555;font-size:12px}
 .cbody{padding:10px 12px}
 .name{font-size:13px;font-weight:600;line-height:1.3;word-break:break-all}
@@ -916,6 +1033,13 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .shbadges{margin:4px 0 2px;display:flex;flex-wrap:wrap;gap:4px}
 .sh{font-size:10px;padding:1px 7px;border-radius:99px;font-weight:600}
 .sh.poi{background:#2d2350;color:#c3b6ff}.sh.lil{background:#234a3a;color:#9ae7c2}.sh.lock{background:#4a3a23;color:#e7c89a}
+.booth{margin-top:5px;font-size:11px;color:#d8b48a;background:#3a2f23;border:1px solid #4a3a28;border-radius:6px;padding:2px 8px;display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.boothinfo{background:#221c16;border:1px solid #3a2f23;border-radius:8px;padding:12px 14px;font-size:13px;max-width:560px}
+.brow{padding:3px 0;border-bottom:1px solid #2a241c;line-height:1.7}
+.bk{display:inline-block;min-width:54px;color:#9a8a72;font-size:12px}
+.booth-open{display:inline-block;margin-top:8px;background:#d8884a;color:#fff;text-decoration:none;padding:7px 14px;border-radius:8px;font-size:12px}
+.booth-open:hover{background:#e89a5a}
+.bnote{margin-top:8px;color:#8a7a62;font-size:11px}
 .searchwrap{display:flex;gap:10px;align-items:center;margin-top:8px}
 #q{flex:0 0 320px;max-width:60%;background:#1e1e24;border:1px solid #3a3a44;color:#e8e8ea;border-radius:8px;padding:8px 12px;font-size:13px}
 .filters{display:flex;gap:6px}
@@ -961,7 +1085,7 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .cp{color:#cfcfd6;padding:2px 0;border-bottom:1px solid #222228;word-break:break-all}
 footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
 </style></head><body>
-<header><h1>Hangar</h1><div class="sub">VRChat .unitypackage カタログ ・ ${count} packages ・ VRChat非公式 / ローカル限定・再配布なし・変換やスクレイピングなし</div>
+<header><h1>Hangar</h1><div class="sub">VRChat .unitypackage カタログ ・ ${count} packages ・ VRChat非公式 / 読み取り専用 ・ 🛒公開BOOTHのサムネ・商品情報を取得して表示（ログイン不要・購入ファイルは送信しません）</div>
 <div class="searchwrap">
   <input id="q" type="search" placeholder="名前で検索…">
   <div class="filters">
@@ -973,6 +1097,7 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
     <button data-f="installed">導入済</button>
     <button data-f="notinstalled">未導入</button>
     <button data-f="dup">重複あり</button>
+    <button data-f="booth">🛒 BOOTH紐付</button>
     <button data-f="poiyomi">要Poiyomi</button>
     <button data-f="liltoon">要lilToon</button>
   </div>
@@ -994,6 +1119,7 @@ function showGrid(){ detail.style.display='none'; grid.style.display='grid'; CUR
 function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); saveState(); }
 // 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
 function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig: DATA[i].sig, name: DATA[i].name}, '*'); }catch(e){} }
+function hangarReveal(b){ var img=b.parentElement&&b.parentElement.querySelector('img.nsfw'); if(img) img.classList.add('revealed'); b.remove(); }
 addEventListener('message',function(e){var m=e.data;if(m&&m.type==='hangar-caps'){document.body.classList.toggle('no-render', m.canRender===false);}});
 grid.innerHTML =DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
 const cards = [...grid.children];

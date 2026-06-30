@@ -4,6 +4,9 @@
 //   ファイルはユーザーがブラウザで取得済みのローカルパスを受け取る前提（[[whitelabel-warm-channel]]ではなく
 //   AssetConnect 方式のローカルパス渡し）。
 
+import { dirname } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+
 export type AssetType = 'avatar' | 'avatar_wearable' | 'world_object' | 'other';
 
 export interface BoothMeta {
@@ -111,6 +114,30 @@ export async function fetchBoothItem(id: number, opts: { timeoutMs?: number } = 
     description: j.description ?? '',
     itemUrl: j.url ?? null,
   };
+}
+
+// 公開画像URL(BOOTH CDN等)をローカルへ1回だけ保存(カタログのサムネ用)。鍵不要・公開CDNのみ想定。
+// 取得した画像はローカルにキャッシュし catalog は file:// で参照する＝CSP不要・再取得なし・初回以降オフライン。
+export async function downloadImage(url: string, destPath: string, opts: { timeoutMs?: number } = {}): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20000);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'hangar/0 (+https://github.com/akagifreeez/hangar)' },
+      redirect: 'follow',
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return false;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) return false;
+    mkdirSync(dirname(destPath), { recursive: true });
+    writeFileSync(destPath, buf);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const ASSET_TYPE_LABEL: Record<AssetType, string> = {

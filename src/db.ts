@@ -432,5 +432,11 @@ export class Catalog {
     ).all(boothItemId) as unknown as { file_path: string; filename: string | null }[];
   }
 
+  // 全リンク(file_path → booth_item_id)。カタログ描画でファイル→BOOTHメタを引くマップ構築に使う。
+  allBoothLinks(): { file_path: string; booth_item_id: number }[] {
+    return this.db.prepare('SELECT file_path, booth_item_id FROM booth_links')
+      .all() as unknown as { file_path: string; booth_item_id: number }[];
+  }
+
   close(): void { this.db.close(); }
 }
