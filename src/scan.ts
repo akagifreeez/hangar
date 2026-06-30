@@ -42,7 +42,7 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
 
 // 同一ファイルの二重登録を防ぐ正規化: 実パス(symlink/8.3短縮名/実ケースを解決)→ドライブ文字大文字+区切り /。
 // realpath が失敗(存在しない等)なら resolve で ./.. を畳んでから文字列正規化にフォールバック。
-function canonical(p: string): string {
+export function canonical(p: string): string {
   let real: string;
   try { real = realpathSync.native(p); } catch { real = resolve(p); }
   return real.replace(/\\/g, '/').replace(/^([a-z]):/, (_m, d) => d.toUpperCase() + ':');

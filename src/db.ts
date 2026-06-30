@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { guidSetHash } from './sig.js';
 import { classifyPackage } from './classify.js';
 import type { ParsedPackage } from './unitypackage.js';
+import type { BoothMeta } from './booth.js';
 
 export interface PackageRow {
   id: number;
@@ -44,6 +45,24 @@ export interface CompareProduct {
   requiresPoi: boolean;
   hasLocked: boolean;
   perProject: Record<string, { pct: number; pkgId: number }>;  // key=project path（導入のあるものだけ）
+}
+
+export interface BoothItemRow {
+  booth_item_id: number;
+  name: string;
+  creator: string | null;
+  shop_subdomain: string | null;
+  category_id: number | null;
+  asset_type: string | null;
+  thumbnail_url: string | null;
+  image_urls_json: string | null;
+  published_at: number | null;
+  adult: number;
+  tags_json: string | null;
+  description: string | null;
+  item_url: string | null;
+  source: string | null;
+  fetched_at: number;
 }
 
 export class Catalog {
@@ -105,6 +124,34 @@ export class Catalog {
         PRIMARY KEY (package_id, project_id)
       );
       CREATE INDEX IF NOT EXISTS idx_install_project ON install_records(project_id);
+
+      -- BOOTH メタ補完(公開API)/ AvatarExplorer 取込で得た商品情報。鍵不要・読み取り専用の補完層。
+      CREATE TABLE IF NOT EXISTS booth_items (
+        booth_item_id  INTEGER PRIMARY KEY,
+        name           TEXT NOT NULL,
+        creator        TEXT,
+        shop_subdomain TEXT,
+        category_id    INTEGER,
+        asset_type     TEXT,                 -- avatar | avatar_wearable | world_object | other
+        thumbnail_url  TEXT,
+        image_urls_json TEXT,
+        published_at   INTEGER,              -- epoch ms
+        adult          INTEGER NOT NULL DEFAULT 0,
+        tags_json      TEXT,
+        description    TEXT,
+        item_url       TEXT,
+        source         TEXT,                 -- 'booth-api' | 'avatar-explorer' | 'manual'
+        fetched_at     INTEGER NOT NULL
+      );
+      -- ローカルの実ファイル(.unitypackage等) ↔ BOOTH商品 の対応。file_path はカタログ packages と同じ正規化パス。
+      CREATE TABLE IF NOT EXISTS booth_links (
+        file_path      TEXT NOT NULL,
+        booth_item_id  INTEGER NOT NULL REFERENCES booth_items(booth_item_id) ON DELETE CASCADE,
+        filename       TEXT,
+        linked_at      INTEGER NOT NULL,
+        PRIMARY KEY (file_path, booth_item_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_booth_links_item ON booth_links(booth_item_id);
     `);
     // 既存DB(列追加前)への後付けマイグレーション。
     // ※ cover_guid/preview_dir が抜けると upsert が「no column named cover_guid」で全件失敗するので必須。
@@ -329,6 +376,60 @@ export class Catalog {
     }
     const products = [...prodBySig.values()].sort((a, b) => a.fileName.localeCompare(b.fileName));
     return { projects, products };
+  }
+
+  // ---------- BOOTH メタ補完層 ----------
+
+  // BOOTH商品メタを保存/更新。source は取得元('booth-api'/'avatar-explorer'/'manual')。
+  upsertBoothItem(m: BoothMeta, source: string): void {
+    this.db.prepare(
+      `INSERT INTO booth_items
+         (booth_item_id, name, creator, shop_subdomain, category_id, asset_type, thumbnail_url, image_urls_json,
+          published_at, adult, tags_json, description, item_url, source, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(booth_item_id) DO UPDATE SET
+         name = excluded.name, creator = excluded.creator, shop_subdomain = excluded.shop_subdomain,
+         category_id = excluded.category_id, asset_type = excluded.asset_type, thumbnail_url = excluded.thumbnail_url,
+         image_urls_json = excluded.image_urls_json, published_at = excluded.published_at, adult = excluded.adult,
+         tags_json = excluded.tags_json, description = excluded.description, item_url = excluded.item_url,
+         source = excluded.source, fetched_at = excluded.fetched_at`
+    ).run(
+      m.itemId, m.name, m.creator || null, m.shopSubdomain, m.categoryId, m.assetType, m.thumbnailUrl,
+      JSON.stringify(m.imageUrls), m.publishedAt, m.adult ? 1 : 0, JSON.stringify(m.tags),
+      m.description || null, m.itemUrl, source, Date.now()
+    );
+  }
+
+  getBoothItem(id: number): BoothItemRow | undefined {
+    return this.db.prepare('SELECT * FROM booth_items WHERE booth_item_id = ?').get(id) as unknown as BoothItemRow | undefined;
+  }
+
+  allBoothItems(): BoothItemRow[] {
+    return this.db.prepare('SELECT * FROM booth_items ORDER BY fetched_at DESC').all() as unknown as BoothItemRow[];
+  }
+
+  // ローカル実ファイル ↔ BOOTH商品 を関連付け。file_path は scan と同じ正規化済みパスを渡すこと。
+  linkBooth(filePath: string, boothItemId: number, filename: string | null): void {
+    this.db.prepare(
+      `INSERT INTO booth_links (file_path, booth_item_id, filename, linked_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(file_path, booth_item_id) DO UPDATE SET filename = excluded.filename, linked_at = excluded.linked_at`
+    ).run(filePath, boothItemId, filename, Date.now());
+  }
+
+  // あるファイルに紐づく BOOTH商品(複数あり得るが通常1件)。
+  boothItemsForPackage(filePath: string): BoothItemRow[] {
+    return this.db.prepare(
+      `SELECT bi.* FROM booth_links bl JOIN booth_items bi ON bi.booth_item_id = bl.booth_item_id
+       WHERE bl.file_path = ?`
+    ).all(filePath) as unknown as BoothItemRow[];
+  }
+
+  // ある BOOTH商品に紐づくローカルファイル一覧(逆引き)。
+  boothLinkedFiles(boothItemId: number): { file_path: string; filename: string | null }[] {
+    return this.db.prepare(
+      'SELECT file_path, filename FROM booth_links WHERE booth_item_id = ? ORDER BY linked_at DESC'
+    ).all(boothItemId) as unknown as { file_path: string; filename: string | null }[];
   }
 
   close(): void { this.db.close(); }

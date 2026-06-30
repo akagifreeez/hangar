@@ -13,13 +13,35 @@ const UV_POOL = String(Math.max(4, Math.min(16, os.cpus().length || 4)));
 
 app.setName('Hangar');                                    // userData = %APPDATA%\Hangar に固定
 
+// hangar:// ディープリンク(AssetConnect方式の受け口)を OS に登録。
+// 開発時(非packaged)は Electron 実行ファイル + アプリパスを渡して再起動方法を OS に教える。
+if (!app.isPackaged && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient('hangar', process.execPath, [path.resolve(process.argv[1])]);
+} else {
+  app.setAsDefaultProtocolClient('hangar');
+}
+
+let pendingDeepLink = null;   // コールド起動でURL付き起動された場合、window 準備後に処理する
+
 // 多重起動防止: 2プロセスが同じ hangar.db / config.json / gui-catalog.html を同時書き込みして壊すのを防ぐ。
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+  // 既に起動中に hangar:// が叩かれると、2つ目のインスタンスの argv がここに渡る(Windows/Linux)。
+  app.on('second-instance', (_e, argv) => {
+    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    const url = extractDeepLink(argv);
+    if (url) handleDeepLink(url);
+  });
 }
+// macOS は argv でなく open-url イベントで届く。
+app.on('open-url', (e, url) => {
+  e.preventDefault();
+  if (app.isReady() && win) handleDeepLink(url); else pendingDeepLink = url;
+});
+// コールド起動時(Windows)は起動 argv に URL が混ざる。
+pendingDeepLink = extractDeepLink(process.argv) || pendingDeepLink;
 
 const ROOT = path.join(__dirname, '..');                  // hangar アプリ本体(読み取り専用になりうる)
 const CLI = path.join(ROOT, 'dist', 'cli.js');            // コンパイル済みCLI(tsx不要)
@@ -111,6 +133,51 @@ async function regen() { await runCli(['catalog', CATALOG]); send('catalog-url',
 // renderer 側 BUSY フラグの抜け(IPC直叩き・連打・将来のD&D)に対する main 側の最終防壁。
 let jobChain = Promise.resolve();
 function withJob(fn) { const run = jobChain.then(fn, fn); jobChain = run.then(() => {}, () => {}); return run; }
+
+// ---------- hangar:// ディープリンク受け口 ----------
+
+// argv 群から hangar:// で始まる引数を取り出す(無ければ null)。
+function extractDeepLink(argv) {
+  return (argv || []).find((a) => typeof a === 'string' && a.startsWith('hangar://')) || null;
+}
+
+// KonoAsset のパーサをミラー: scheme=hangar / action=addAsset|add-asset / path|dir|file(複数) + id|boothItemId。
+// AssetConnect は `hangar://addAsset?path=<DL保存先パス>&id=<boothID>` を発火する想定。
+function parseHangarUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (u.protocol !== 'hangar:') return null;
+  const action = (u.hostname || u.pathname.replace(/^\/+/, '')).toLowerCase();
+  if (action !== 'addasset' && action !== 'add-asset') return null;
+  const paths = [];
+  for (const key of ['path', 'dir', 'file']) for (const v of u.searchParams.getAll(key)) if (v) paths.push(v);
+  let boothItemId = null;
+  for (const key of ['id', 'boothItemId', 'boothId', 'boothid', 'boothitemid']) {
+    if (boothItemId != null) break;
+    const v = u.searchParams.get(key);
+    if (v != null) { const n = parseInt(v, 10); if (Number.isFinite(n)) boothItemId = n; }
+  }
+  return { paths, boothItemId };
+}
+
+// 受け取った hangar:// を import-booth へ委譲。DLもログインもしない(ファイルは既にローカルにある前提)。
+async function handleDeepLink(url) {
+  const parsed = parseHangarUrl(url);
+  if (!parsed) { send('status', '不明な hangar:// URL'); return; }
+  if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+  if (!parsed.paths.length) { send('status', 'hangar://addAsset: path がありません'); return; }
+  if (parsed.boothItemId == null) { send('status', 'hangar://addAsset: id がありません(v0は必須)'); return; }
+  await withJob(async () => {
+    let ok = 0;
+    for (const p of parsed.paths) {
+      send('status', `取り込み: ${path.basename(p)} (BOOTH ${parsed.boothItemId})`);
+      const { code } = await runCli(['import-booth', p, '--id', String(parsed.boothItemId)]);
+      if (code === 0) ok++;
+    }
+    if (ok) { await regen(); send('catalog-url', catalogUrl()); }
+    send('deep-link-done', { count: ok, total: parsed.paths.length });
+  });
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -235,6 +302,10 @@ ipcMain.handle('render-capabilities', async () => {
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;   // 2つ目のインスタンスは窓を作らず終了
   createWindow();
+  // URL付きでコールド起動された場合、カタログ読込後に取り込みを実行。
+  if (pendingDeepLink) {
+    win.webContents.once('did-finish-load', () => { const u = pendingDeepLink; pendingDeepLink = null; handleDeepLink(u); });
+  }
   if (SMOKE) {
     win.webContents.once('did-finish-load', () => {
       setTimeout(async () => {

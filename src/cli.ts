@@ -3,9 +3,13 @@ import { cpus } from 'node:os';
 import { basename, join, dirname, relative } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { guidSetHash } from './sig.js';
-import { Catalog, type PackageRow, type Product, type CompareProduct } from './db.js';
-import { scanDir } from './scan.js';
+import { Catalog, type PackageRow, type Product, type CompareProduct, type BoothItemRow } from './db.js';
+import { scanDir, canonical } from './scan.js';
+import { parsePackage } from './unitypackage.js';
+import { fetchBoothItem, BoothFetchError, ASSET_TYPE_LABEL, type AssetType } from './booth.js';
+import { importAvatarExplorer, formatAeImportText } from './avatarexplorer.js';
 import { projectGuids, matchPackages, expandProjectRoots } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
 import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, readVpmTooling, type CatalogPkg } from './template.js';
@@ -428,6 +432,100 @@ async function main(): Promise<void> {
         }));
         break;
       }
+      case 'booth-enrich': {
+        // BOOTH公開メタ(booth.pm/ja/items/<id>.json)を取得し booth_items に保存。鍵不要・読取専用・DLしない。
+        const ids = args.filter(a => !a.startsWith('--')).map(a => parseInt(a, 10)).filter(n => Number.isFinite(n));
+        if (!ids.length) return fail('usage: booth-enrich <itemId> [itemId...]   例: booth-enrich 8050793');
+        let ok = 0, ng = 0;
+        for (const id of ids) {
+          try {
+            const m = await fetchBoothItem(id);
+            cat.upsertBoothItem(m, 'booth-api');
+            ok++;
+            console.log(`  ✓ ${id}  ${m.name}  〔${ASSET_TYPE_LABEL[m.assetType]}〕  by ${m.creator || '?'}${m.adult ? '  (R-18)' : ''}`);
+          } catch (e) {
+            ng++;
+            console.error(`  ✗ ${id}  ${e instanceof BoothFetchError ? e.message : (e instanceof Error ? e.message : String(e))}`);
+          }
+        }
+        console.log(`\nBOOTHメタ: ${ok} 件保存${ng ? ` / ${ng} 件失敗` : ''}（DB: ${dbPath}）`);
+        if (ng && !ok) process.exitCode = 1;
+        break;
+      }
+      case 'booth-info': {
+        // 保存済みBOOTHメタの表示(オフライン)。<id>指定で詳細、無指定で一覧。
+        const json = args.includes('--json');
+        const idArg = args.find(a => !a.startsWith('--'));
+        if (idArg) {
+          const row = cat.getBoothItem(parseInt(idArg, 10));
+          if (!row) return fail(`未保存です (id=${idArg})。先に: booth-enrich ${idArg}`);
+          if (json) { console.log(JSON.stringify(row)); break; }
+          console.log(formatBoothInfo(row, cat));
+          break;
+        }
+        const rows = cat.allBoothItems();
+        if (json) { console.log(JSON.stringify(rows)); break; }
+        if (!rows.length) { console.log('(BOOTHメタ未保存 — booth-enrich <id> / import-booth / import-ae で追加)'); break; }
+        for (const r of rows) {
+          const t = ASSET_TYPE_LABEL[(r.asset_type ?? 'other') as AssetType] ?? r.asset_type;
+          console.log(`  ${r.booth_item_id}  ${r.name}  〔${t}〕  by ${r.creator ?? '?'}  [${r.source}]`);
+        }
+        console.log(`\n保存済み ${rows.length} 件`);
+        break;
+      }
+      case 'import-booth': {
+        // ローカル実ファイル(ブラウザでDL済み) + BOOTH item_id を受け、カタログ取込＋メタ補完＋関連付け。
+        // hangar:// ディープリンク(AssetConnect方式)受け口の実体。DLもログインもしない。
+        const json = args.includes('--json');
+        const noFetch = args.includes('--no-fetch');
+        const idIdx = args.indexOf('--id');
+        const idVal = idIdx >= 0 ? args[idIdx + 1] : undefined;
+        const nameIdx = args.indexOf('--name');
+        const nameVal = nameIdx >= 0 ? args[nameIdx + 1] : undefined;
+        const skip = new Set<number>();
+        for (const fi of [idIdx, nameIdx]) if (fi >= 0) skip.add(fi + 1);
+        const pathArg = args.find((a, i) => !a.startsWith('--') && !skip.has(i));
+        if (!pathArg) return fail('usage: import-booth <path(.unitypackage|dir)> --id <boothItemId> [--name <filename>] [--no-fetch]');
+        const boothId = idVal ? parseInt(idVal, 10) : NaN;
+        if (!Number.isFinite(boothId)) return fail('--id <boothItemId> を数値で指定してください');
+        if (!existsSync(pathArg)) return fail('パスが見つかりません: ' + pathArg);
+
+        // 1) メタ補完(公開API)。失敗してもオフライン/非公開のプレースホルダで続行(関連付けは残す)。
+        if (!noFetch) {
+          try { cat.upsertBoothItem(await fetchBoothItem(boothId), 'booth-api'); }
+          catch (e) { console.error(`  ⚠ メタ取得スキップ: ${e instanceof Error ? e.message : String(e)}`); }
+        }
+        if (!cat.getBoothItem(boothId)) {
+          cat.upsertBoothItem({ itemId: boothId, name: nameVal ?? `(BOOTH ${boothId})`, creator: '', shopSubdomain: null, categoryId: null, assetType: 'other', thumbnailUrl: null, imageUrls: [], publishedAt: null, adult: false, tags: [], description: '', itemUrl: `https://booth.pm/ja/items/${boothId}` }, 'manual');
+        }
+
+        // 2) ファイル取込 + 3) 関連付け
+        const imported = await importLocalForBooth(cat, cacheDir, pathArg);
+        const linkName = nameVal ?? basename(pathArg);
+        if (imported.pkgPaths.length) for (const cf of imported.pkgPaths) cat.linkBooth(cf, boothId, linkName);
+        else cat.linkBooth(canonical(pathArg), boothId, linkName);
+
+        const stored = cat.getBoothItem(boothId);
+        if (json) { console.log(JSON.stringify({ boothItemId: boothId, name: stored?.name, assetType: stored?.asset_type, scanned: imported.scanned, linked: imported.pkgPaths.length || 1 })); break; }
+        console.log(`取込: ${stored?.name ?? '(' + boothId + ')'}  〔${ASSET_TYPE_LABEL[(stored?.asset_type ?? 'other') as AssetType] ?? '?'}〕`);
+        console.log(imported.scanned ? `  カタログ解析: ${imported.scanned} パッケージ` : `  ※ .unitypackage でないため関連付けのみ（中身解析なし）`);
+        console.log(`  関連付け: ${linkName} ↔ BOOTH ${boothId}`);
+        console.log(`  → catalog 再生成でメタ付き表示。`);
+        break;
+      }
+      case 'import-ae': {
+        // AvatarExplorer エクスポート(ItemsData.json)取込。KonoAsset/AvatarExplorer互換の事実上標準フォーマット。
+        const json = args.includes('--json');
+        const doScan = args.includes('--scan');
+        const dir = args.find(a => !a.startsWith('--'));
+        if (!dir) return fail('usage: import-ae <AvatarExplorerExportDir> [--scan] [--json]   (ItemsData.json を含むフォルダ)');
+        if (!existsSync(dir)) return fail('フォルダが見つかりません: ' + dir);
+        const res = await importAvatarExplorer(dir, cat, { scan: doScan, cacheDir });
+        if (json) { console.log(JSON.stringify(res)); break; }
+        console.log(formatAeImportText(res));
+        if (res.errors.length && !res.importedMeta) process.exitCode = 1;
+        break;
+      }
       case 'version': case '--version': case '-v':
         console.log('hangar ' + appVersion());
         break;
@@ -449,6 +547,10 @@ async function main(): Promise<void> {
         console.log('  list-projects / prune-projects   登録プロジェクト一覧 / 不正登録(不在・Assets無し)の掃除');
         console.log('  installs                         パッケージ→導入先一覧（重複導入警告）');
         console.log('  catalog [out.html]               カタログ(クリックで詳細: 中身/プレビュー/導入台帳)を生成');
+        console.log('  booth-enrich <itemId...>         BOOTH公開メタを取得して保存(鍵不要・DLしない)');
+        console.log('  booth-info [<itemId>]            保存済みBOOTHメタの表示(一覧/詳細)');
+        console.log('  import-booth <path> --id <bid>   DL済みファイル+booth idを取込(hangar://受け口の実体)');
+        console.log('  import-ae <dir> [--scan]         AvatarExplorer/KonoAsset書出(ItemsData.json)を取込');
         console.log('  version                          バージョンを表示');
         if (cmd) process.exitCode = 1;   // 不明コマンドは失敗扱い(typoが即発覚)
         break;
@@ -457,6 +559,53 @@ async function main(): Promise<void> {
   } finally {
     cat.close();
   }
+}
+
+// ---------- BOOTH 取込ヘルパー ----------
+
+// ローカルパスをカタログへ取り込み、関連付け対象の正規化パス(.unitypackage)を返す。
+//  - .unitypackage  : 単体解析して upsert（scan と同じ previewDir スキーム）
+//  - ディレクトリ   : scanDir で配下の .unitypackage を一括解析
+//  - その他(zip等)  : v0 は解析せず関連付けのみ（pkgPaths 空で返す）
+async function importLocalForBooth(cat: Catalog, cacheDir: string, inputPath: string): Promise<{ pkgPaths: string[]; scanned: number }> {
+  const st = statSync(inputPath);
+  if (st.isDirectory()) {
+    const sum = await scanDir(inputPath, cat, cacheDir);
+    const pkgPaths: string[] = [];
+    try {
+      for (const rel of readdirSync(inputPath, { recursive: true }) as string[]) {
+        if (typeof rel === 'string' && rel.toLowerCase().endsWith('.unitypackage')) pkgPaths.push(canonical(join(inputPath, rel)));
+      }
+    } catch { /* 列挙失敗は関連付け無しで続行 */ }
+    return { pkgPaths, scanned: sum.parsed };
+  }
+  if (inputPath.toLowerCase().endsWith('.unitypackage')) {
+    const cf = canonical(inputPath);
+    const previewDir = join(cacheDir, 'previews', createHash('md5').update(cf).digest('hex').slice(0, 16));
+    cat.upsert(await parsePackage(cf, { previewDir }));
+    return { pkgPaths: [cf], scanned: 1 };
+  }
+  return { pkgPaths: [], scanned: 0 };
+}
+
+function formatBoothInfo(r: BoothItemRow, cat: Catalog): string {
+  const L: string[] = [];
+  const type = ASSET_TYPE_LABEL[(r.asset_type ?? 'other') as AssetType] ?? r.asset_type ?? '?';
+  L.push(`BOOTH ${r.booth_item_id}  ${r.name}`);
+  L.push(`  種別   : ${type}${r.adult ? '  (R-18)' : ''}`);
+  L.push(`  作者   : ${r.creator ?? '?'}${r.shop_subdomain ? `  (${r.shop_subdomain})` : ''}`);
+  if (r.published_at) L.push(`  公開   : ${new Date(r.published_at).toISOString().slice(0, 10)}`);
+  let tags: string[] = [];
+  try { tags = r.tags_json ? JSON.parse(r.tags_json) as string[] : []; } catch { /* 壊れ無視 */ }
+  if (tags.length) L.push(`  タグ   : ${tags.join(', ')}`);
+  if (r.item_url) L.push(`  URL    : ${r.item_url}`);
+  L.push(`  取得元 : ${r.source}`);
+  const files = cat.boothLinkedFiles(r.booth_item_id);
+  if (files.length) {
+    L.push(`  紐づくファイル (${files.length}):`);
+    for (const f of files) L.push(`    ・${f.filename ?? f.file_path}`);
+  }
+  return L.join('\n');
 }
 
 // ---------- カタログ描画 ----------
