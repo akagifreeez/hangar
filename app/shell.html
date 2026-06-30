@@ -55,22 +55,24 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
 </style></head><body>
 <div id="bar">
   <h1>Hangar</h1>
-  <button id="scan" title="ライブラリ(BOOTH等の保存先)をスキャン　(Ctrl+O)">📁 ライブラリをスキャン</button>
-  <button id="detect" class="sec">🎯 プロジェクト検出</button>
-  <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック　(Ctrl+D)">📦 取り込み前チェック</button>
+  <button id="diffbtn" class="sec" title="取り込み前に、選んだ.unitypackageが既存プロジェクトの何を上書きするか/足りないシェーダはないかをチェック　(Ctrl+D)">🛡 取り込み前チェック</button>
   <button id="helpbtn" class="sec" title="はじめての方へ・用語のミニ辞典">❓ ヘルプ</button>
-  <button id="toolsbtn" class="sec" title="詳しい人向けツール（再スキャン・テンプレ・プロジェクト比較）">🛠 ツール ▾</button>
-  <span id="toolsgrp" style="display:none">
-    <span class="divider"></span>
-    <button id="rescan" class="sec" title="記憶したライブラリ/プロジェクトをやり直して差分を取り込む　(F5)">🔄 再スキャン</button>
-    <button id="savetmpl" class="sec" title="改変済みアバターの“自作分だけ”を保存し、依存購入物をマニフェスト化（購入物のバイトは同梱しません）">💾 テンプレ保存</button>
-    <button id="restoretmpl" class="sec" title="テンプレをまっさらなプロジェクトへ復元し、再インポートすべき購入物を案内">♻ テンプレ復元</button>
-    <button id="cmpbtn" class="sec" title="登録済みプロジェクトを2つ選んで導入商品を突き合わせ(共通/Aのみ/Bのみ・版違い・要シェーダ)">🔀 プロジェクト比較</button>
-    <button id="importae" class="sec" title="AvatarExplorer / KonoAsset の書き出しフォルダ(ItemsData.json)を取り込み、BOOTHメタ付きでカタログに統合（移行用）">📥 他ツールから取込</button>
-    <button id="boothmeta" class="sec" title="保存済みのBOOTH商品の公開情報(作者・種別・タグ)を補完。鍵不要・ダウンロードはしません">🛒 BOOTHメタ補完</button>
-  </span>
-  <span class="tag">VRChat非公式・ローカル限定</span>
+  <span class="tag">VRChat非公式・読み取り専用</span>
   <span id="status">準備完了</span>
+  <!-- 操作はカタログ左サイドバーに集約(Phase2)。各ハンドラ温存のためボタン要素はDOMに残す(非表示)＝サイドバーが hangar-action でこれらを叩く。 -->
+  <span id="hidden-actions" style="display:none">
+    <button id="scan" title="(Ctrl+O)">📁 ライブラリをスキャン</button>
+    <button id="detect">🎯 プロジェクト検出</button>
+    <button id="toolsbtn">🛠</button>
+    <span id="toolsgrp">
+      <button id="rescan" title="(F5)">🔄 再スキャン</button>
+      <button id="savetmpl">💾 テンプレ保存</button>
+      <button id="restoretmpl">♻ テンプレ復元</button>
+      <button id="cmpbtn">🔀 プロジェクト比較</button>
+      <button id="importae">📥 他ツールから取込</button>
+      <button id="boothmeta">🛒 BOOTHメタ補完</button>
+    </span>
+  </span>
 </div>
 <div id="prog"><div id="progbar"></div><span id="progtxt"></span></div>
 <div id="empty">
@@ -293,7 +295,22 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     if (e.source !== $('cat').contentWindow) return;
     const m = e.data;
     if (m && m.type === 'hangar-render' && (typeof m.sig === 'string' || typeof m.name === 'string')) runRender({ sig: m.sig, name: m.name });
+    else if (m && m.type === 'hangar-action' && typeof m.action === 'string') handleSidebarAction(m.action);
   });
+  // カタログ左サイドバー(iframe内)のアクション行 → 既存ハンドラへ委譲。ボタン要素は #hidden-actions に温存。
+  // 各ハンドラは内部で BUSY を見るので二重ガードしない（help はいつでも可）。
+  function handleSidebarAction(a){
+    switch (a) {
+      case 'scan': doScan(); break;
+      case 'detect': $('detect').onclick(); break;
+      case 'rescan': $('rescan').onclick(); break;
+      case 'template-save': $('savetmpl').onclick(); break;
+      case 'template-restore': $('restoretmpl').onclick(); break;
+      case 'compare': openCmp(); break;
+      case 'importAe': $('importae').onclick(); break;
+      case 'enrich': $('boothmeta').onclick(); break;
+    }
+  }
 
   // ---- 取り込み前チェック(diff) ----
   let DIFF_PKG = '';

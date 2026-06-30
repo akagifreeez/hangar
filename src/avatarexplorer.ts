@@ -3,7 +3,7 @@
 // v0: メタ(商品情報)を booth_items に取り込み、--scan 指定時のみ ItemPath 配下の .unitypackage を
 //     カタログ解析して BOOTH商品に関連付ける。DLもログインもしない・読み取り専用。
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import { scanDir, canonical } from './scan.js';
 import type { Catalog } from './db.js';
 import type { AssetType, BoothMeta } from './booth.js';
@@ -42,8 +42,8 @@ function aeTypeToAssetType(t: number | undefined): AssetType {
   return 'other';
 }
 
-// dir 配下の .unitypackage を再帰列挙(canonical 済み)。
-function collectUnitypackages(dir: string): string[] {
+// dir 配下の .unitypackage を再帰列挙(canonical 済み)。ディレクトリ名が .unitypackage の場合は除外(isFile)。
+export function collectUnitypackages(dir: string): string[] {
   const out: string[] = [];
   let ents: string[];
   try { ents = readdirSync(dir, { recursive: true }) as string[]; } catch { return out; }
@@ -95,9 +95,10 @@ export async function importAvatarExplorer(
       shopSubdomain: null,
       categoryId: null,
       assetType,
-      thumbnailUrl: it.ThumbnailUrl?.trim() || null,
+      // ThumbnailUrl は http(s) のときだけ保持。AvatarExplorer のローカルパスは fetch 不可なので捨てる(booth-enrich で実サムネ取得)。
+      thumbnailUrl: (it.ThumbnailUrl && /^https?:\/\//i.test(it.ThumbnailUrl.trim())) ? it.ThumbnailUrl.trim() : null,
       imageUrls: [],
-      publishedAt: null,             // AvatarExplorer は登録日のみ＝公開日は不明なので埋めない(盛らない)
+      publishedAt: null,             // AvatarExplorer は登録日のみで公開日は不明 → 推測で埋めない（Honest notes）
       adult: false,
       tags,
       description: it.ItemMemo?.trim() || '',
@@ -108,7 +109,8 @@ export async function importAvatarExplorer(
     res.byType[assetType] = (res.byType[assetType] ?? 0) + 1;
 
     if (opts.scan && it.ItemPath) {
-      const itemDir = join(dir, it.ItemPath);
+      // ItemPath は絶対パスのことがある(AvatarExplorer)。絶対ならそのまま、相対なら export dir 起点で解決。
+      const itemDir = isAbsolute(it.ItemPath) ? it.ItemPath : join(dir, it.ItemPath);
       if (existsSync(itemDir)) {
         let pkgs: string[] = [];
         try {

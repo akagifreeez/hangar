@@ -9,7 +9,7 @@ import { Catalog, type PackageRow, type Product, type CompareProduct, type Booth
 import { scanDir, canonical } from './scan.js';
 import { parsePackage } from './unitypackage.js';
 import { fetchBoothItem, downloadImage, BoothFetchError, ASSET_TYPE_LABEL, type AssetType } from './booth.js';
-import { importAvatarExplorer, formatAeImportText } from './avatarexplorer.js';
+import { importAvatarExplorer, formatAeImportText, collectUnitypackages } from './avatarexplorer.js';
 import { projectGuids, matchPackages, expandProjectRoots } from './detect.js';
 import { diffImport, formatDiffText, formatDiffHtmlPage } from './diff.js';
 import { saveTemplate, restoreTemplate, formatSaveText, formatRestoreText, readVpmTooling, type CatalogPkg } from './template.js';
@@ -275,7 +275,7 @@ async function main(): Promise<void> {
           const heroPath = renderDir ? join(renderDir, 'hero.png') : '';
           const viewerPath = renderDir ? join(renderDir, 'viewer.html') : '';
           const heroUri = heroPath && existsSync(heroPath) ? dataUri(heroPath) : '';
-          const viewerHref = viewerPath && existsSync(viewerPath) ? relative(outDir, viewerPath).replace(/\\/g, '/') : '';
+          const viewerHref = viewerPath && existsSync(viewerPath) ? toFileUrl(outDir, viewerPath) : '';
           // 複数prefab: previews.json の各サムネ(preview{i}.png)を相対参照で拾う(dataURI化せずカタログ肥大を避ける)
           let prefabThumbs: string[] = [];
           if (renderDir) {
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
             if (existsSync(pj)) {
               try {
                 const arr = JSON.parse(readFileSync(pj, 'utf8')) as { thumb?: string }[];
-                prefabThumbs = arr.map(a => a.thumb ? relative(outDir, join(renderDir, a.thumb)).replace(/\\/g, '/') : '').filter(Boolean);
+                prefabThumbs = arr.map(a => a.thumb ? toFileUrl(outDir, join(renderDir, a.thumb)) : '').filter(Boolean);
               } catch { /* previews.json壊れ等は無視 */ }
             }
           }
@@ -300,9 +300,9 @@ async function main(): Promise<void> {
           if (boothThumbRel) { cardImg = boothThumbRel; imgKind = 'booth'; }
           else if (heroUri) { cardImg = heroUri; imgKind = 'local'; }
           else if (cover) { cardImg = cover; imgKind = 'local'; }
-          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category) };
+          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount };
         });
-        writeFileSync(out, renderApp(data, products.length), 'utf8');
+        writeFileSync(out, renderApp(data, products.length, cat.allProjects().length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
         break;
       }
@@ -451,7 +451,11 @@ async function main(): Promise<void> {
         const all = args.includes('--all');
         let ids = args.filter(a => !a.startsWith('--')).map(a => parseInt(a, 10)).filter(n => Number.isFinite(n));
         if (all) ids = [...new Set([...ids, ...cat.allBoothItems().map(b => b.booth_item_id)])];
-        if (!ids.length) return fail('usage: booth-enrich <itemId...> | booth-enrich --all   例: booth-enrich 8050793');
+        if (!ids.length) {
+          // --all で対象ゼロ(新規スキャン直後など。plain scan は BOOTH紐付けを作らない)はエラーにしない。
+          if (all) { console.log('補完対象のBOOTH商品がありません。BOOTH紐付けは「他ツールから取込(AvatarExplorer/KonoAsset)」や hangar:// 受け口、取り込み前チェック経由で作られます。'); break; }
+          return fail('usage: booth-enrich <itemId...> | booth-enrich --all   例: booth-enrich 8050793');
+        }
         let ok = 0, ng = 0, thumbOk = 0;
         for (const id of ids) {
           try {
@@ -496,7 +500,7 @@ async function main(): Promise<void> {
       }
       case 'booth-thumbs': {
         // 保存済みBOOTH商品のサムネをローカルへキャッシュ(skip-if-exists)。catalogが実画像を表示できる。鍵不要・公開CDN。
-        const items = cat.allBoothItems().filter(b => b.thumbnail_url);
+        const items = cat.allBoothItems().filter(b => b.thumbnail_url && /^https?:\/\//i.test(b.thumbnail_url));
         if (!items.length) { console.log('(サムネ対象なし — 先に booth-enrich でメタを取得してください)'); break; }
         console.log(`BOOTHサムネをキャッシュ中… (${items.length} 件対象)`);
         const r = await cacheBoothThumbs(items, cacheDir);
@@ -602,13 +606,7 @@ async function importLocalForBooth(cat: Catalog, cacheDir: string, inputPath: st
   const st = statSync(inputPath);
   if (st.isDirectory()) {
     const sum = await scanDir(inputPath, cat, cacheDir);
-    const pkgPaths: string[] = [];
-    try {
-      for (const rel of readdirSync(inputPath, { recursive: true }) as string[]) {
-        if (typeof rel === 'string' && rel.toLowerCase().endsWith('.unitypackage')) pkgPaths.push(canonical(join(inputPath, rel)));
-      }
-    } catch { /* 列挙失敗は関連付け無しで続行 */ }
-    return { pkgPaths, scanned: sum.parsed };
+    return { pkgPaths: collectUnitypackages(inputPath), scanned: sum.parsed };
   }
   if (inputPath.toLowerCase().endsWith('.unitypackage')) {
     const cf = canonical(inputPath);
@@ -675,11 +673,17 @@ function thumbExt(url: string): string {
 function cachedThumbPath(cacheDir: string, id: number, url: string): string {
   return join(cacheDir, 'booth-thumbs', `${id}.${thumbExt(url)}`);
 }
-// 既にキャッシュ済みサムネがあれば catalog 出力先からの相対 file:// パスを返す(無ければ空)。
+// catalog(file://)から参照できるURLを返す。同一ドライブなら相対パス、別ドライブで relative() が
+// 絶対パス(例 D:/...)を返した場合は file:/// 絶対URLに変換する(ドライブ文字をスキームと誤解させない)。
+function toFileUrl(outDir: string, p: string): string {
+  const rel = relative(outDir, p).replace(/\\/g, '/');
+  return /^[a-zA-Z]:\//.test(rel) ? 'file:///' + rel : rel;
+}
+// 既にキャッシュ済みサムネがあれば catalog 出力先からの参照URLを返す(無ければ空)。
 function findCachedThumbRel(cacheDir: string, outDir: string, id: number): string {
   for (const ext of ['jpg', 'png', 'webp', 'gif']) {
     const p = join(cacheDir, 'booth-thumbs', `${id}.${ext}`);
-    if (existsSync(p)) return relative(outDir, p).replace(/\\/g, '/');
+    if (existsSync(p)) return toFileUrl(outDir, p);
   }
   return '';
 }
@@ -687,7 +691,8 @@ function findCachedThumbRel(cacheDir: string, outDir: string, id: number): strin
 async function cacheBoothThumbs(items: BoothItemRow[], cacheDir: string): Promise<{ ok: number; skip: number; fail: number }> {
   let ok = 0, skip = 0, fail = 0;
   for (const b of items) {
-    if (!b.thumbnail_url) continue;
+    // http(s) のみ取得対象。AvatarExplorer等のローカルパスは fetch 不可なので対象外。
+    if (!b.thumbnail_url || !/^https?:\/\//i.test(b.thumbnail_url)) continue;
     const dest = cachedThumbPath(cacheDir, b.booth_item_id, b.thumbnail_url);
     if (existsSync(dest)) { skip++; continue; }
     if (await downloadImage(b.thumbnail_url, dest)) ok++; else fail++;
@@ -990,17 +995,48 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
     `<h3>プレビュー画像（${gallery.length}）</h3>${gal}`;
 }
 
-function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string }[], count: number): string {
+function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number }[], count: number, projectCount = 0): string {
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
+  // サイドバー/インサイトの件数は生成時に data から集計(=正確・追加IPC/フレーム跨ぎ同期なし)。tags は空白区切りの素文字列。
+  const hasTag = (t: string, tag: string) => (' ' + t + ' ').includes(' ' + tag + ' ');
+  const catCount = (c: string) => data.filter(d => d.category === c).length;
+  const sl = {
+    dup: data.filter(d => hasTag(d.tags, 'dup')).length,
+    installed: data.filter(d => hasTag(d.tags, 'installed')).length,
+    notinstalled: data.filter(d => hasTag(d.tags, 'notinstalled')).length,
+    shader: data.filter(d => hasTag(d.tags, 'poiyomi') || hasTag(d.tags, 'liltoon')).length,
+    nobooth: data.filter(d => !hasTag(d.tags, 'booth')).length,
+  };
+  const CATS: [string, string][] = [['model', '3Dモデル'], ['tool', 'ツール'], ['animation', 'アニメ'], ['material', 'マテリアル'], ['other', 'その他']];
+  const scopeRows = `<button class="srow scope on" data-scope="">すべて<span class="c">${count}</span></button>` +
+    CATS.map(([c, label]) => { const n = catCount(c); return n ? `<button class="srow scope" data-scope="cat-${c}">${label}<span class="c">${n}</span></button>` : ''; }).join('');
+  const slRow = (key: string, label: string, n: number) => n ? `<button class="srow sl" data-sl="${key}">${label}<span class="c">${n}</span></button>` : '';
+  const insight = `${count}商品` + (projectCount ? ` ・ 🎯 ${projectCount}プロジェクトに導入追跡` : '') + (sl.dup ? ` ・ ⧉ ${sl.dup}件の重複` : '') + (sl.shader ? ` ・ 🟣 ${sl.shader}件 要シェーダ` : '');
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hangar カタログ</title><style>
 :root{color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-serif}
-header{padding:14px 20px;border-bottom:1px solid #2a2a32}
-header h1{font-size:16px;margin:0 0 2px;font-weight:600}
-header .sub{color:#888;font-size:12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px}
+html,body{height:100%;margin:0}
+body{background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-serif}
+/* レイアウト: 左サイドバー(iframe内) + メイン(トップバー/インサイト/グリッド/詳細) */
+#wrap{display:flex;height:100%}
+#side{flex:0 0 232px;width:232px;background:#1b1b20;border-right:1px solid #2a2a32;overflow:auto;padding:8px 6px}
+#main{flex:1 1 auto;min-width:0;overflow:auto;position:relative}
+.srow{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:0;color:#cfcfd6;padding:6px 10px;border-radius:7px;cursor:pointer;font-size:13px;line-height:1.3}
+.srow:hover{background:#23232b}
+.srow.on{background:#4a6cf7;color:#fff}
+.srow .c{font-size:11px;color:#888;flex:0 0 auto}
+.srow.on .c{color:#dfe6ff}
+.srow.act{color:#9fb0e8}
+.srow.prim{background:#23314f;color:#cfe0ff;margin:2px 0 4px;font-weight:600}
+.srow.prim:hover{background:#2c3e63}
+.sgrp{font-size:11px;color:#777;padding:11px 10px 3px;margin-top:2px}
+.sfoot{font-size:10px;color:#6a6a72;padding:12px 10px;line-height:1.6;border-top:1px solid #2a2a32;margin-top:10px}
+#topbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 18px;border-bottom:1px solid #2a2a32;position:sticky;top:0;background:#16161a;z-index:6}
+#topbar select{background:#23232b;border:1px solid #3a3a44;color:#ddd;border-radius:7px;padding:6px 8px;font-size:12px;cursor:pointer}
+#insight{padding:8px 18px;color:#cfcfd6;font-size:12px;background:#1a1a20;border-bottom:1px solid #2a2a32}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;padding:18px}
+body.compact .grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;padding:12px}
 .card{position:relative;background:#1e1e24;border:1px solid #2a2a32;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .1s}
 .card:hover{border-color:#4a6cf7}
 .genbtn{position:absolute;top:6px;right:6px;background:#4a6cf7e6;border:0;color:#fff;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
@@ -1085,76 +1121,116 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .cp{color:#cfcfd6;padding:2px 0;border-bottom:1px solid #222228;word-break:break-all}
 footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
 </style></head><body>
-<header><h1>Hangar</h1><div class="sub">VRChat .unitypackage カタログ ・ ${count} packages ・ VRChat非公式 / 読み取り専用 ・ 🛒公開BOOTHのサムネ・商品情報を取得して表示（ログイン不要・購入ファイルは送信しません）</div>
-<div class="searchwrap">
-  <input id="q" type="search" placeholder="名前で検索…">
-  <div class="filters">
-    <button data-f="all" class="on">すべて</button>
-    <button data-f="cat-model">3Dモデル</button>
-    <button data-f="cat-tool">ツール</button>
-    <button data-f="cat-animation">アニメ</button>
-    <button data-f="cat-material">マテリアル</button>
-    <button data-f="installed">導入済</button>
-    <button data-f="notinstalled">未導入</button>
-    <button data-f="dup">重複あり</button>
-    <button data-f="booth">🛒 BOOTH紐付</button>
-    <button data-f="poiyomi">要Poiyomi</button>
-    <button data-f="liltoon">要lilToon</button>
+<div id="wrap">
+<aside id="side">
+  <button class="srow act prim" data-act="scan">＋ ライブラリを取り込む</button>
+  <div class="sgrp">ライブラリ（種類）</div>
+  ${scopeRows}
+  <div class="sgrp">気になるもの</div>
+  ${slRow('dup', '⚠ 二重買いかも', sl.dup)}
+  ${slRow('notinstalled', '🆕 まだ入れてない', sl.notinstalled)}
+  ${slRow('installed', '✅ 導入済', sl.installed)}
+  ${slRow('shader', '🟣 シェーダ要注意', sl.shader)}
+  ${slRow('nobooth', '🛒 BOOTH情報なし', sl.nobooth)}
+  <div class="sgrp">マイリスト</div>
+  <button class="srow act" data-act="template-save">💾 セットアップを保存</button>
+  <button class="srow act" data-act="template-restore">♻ テンプレを復元</button>
+  <div class="sgrp">プロジェクト</div>
+  <button class="srow act" data-act="detect">＋ プロジェクトを登録</button>
+  <button class="srow act" data-act="compare">🔀 見くらべる・整理</button>
+  <div class="sgrp">もっと</div>
+  <button class="srow act" data-act="importAe">📥 他ツールから取込</button>
+  <button class="srow act" data-act="enrich">🛒 BOOTHメタ補完</button>
+  <button class="srow act" data-act="rescan">🔄 再スキャン</button>
+  <div class="sfoot">🛒 公開BOOTHのサムネ・商品情報を取得して表示（ログイン不要）。購入ファイルは送信しません・ローカル読み取り専用。</div>
+</aside>
+<main id="main">
+  <div id="topbar">
+    <input id="q" type="search" placeholder="商品名・作者で検索…">
+    <select id="sort" title="並び替え"><option value="name">名前順</option><option value="size">サイズが大きい順</option><option value="dup">重複が多い順</option></select>
+    <select id="density" title="表示密度"><option value="comfortable">標準表示</option><option value="compact">密に表示</option></select>
+    <span id="count"></span>
   </div>
-  <span id="count"></span>
-</div></header>
-<div id="grid" class="grid"></div>
-<div id="detail" class="detail" style="display:none"></div>
-<footer>preview.png は作者環境で生成された参考画像。忠実プレビューは方式A（裏でUnity焼き）で別途生成。クリックで詳細（中身/プレビュー/導入台帳）。</footer>
+  <div id="insight">${insight}</div>
+  <div id="grid" class="grid"></div>
+  <div id="detail" class="detail" style="display:none"></div>
+  <footer>preview.png は作者環境で生成された参考画像。忠実プレビューは方式A（裏でUnity焼き）で別途生成。クリックで詳細。 ・ 🛒公開BOOTHのサムネ/情報を取得（購入ファイルは送信しません・読み取り専用）。</footer>
+</main>
+</div>
 <script>
 const DATA = ${json};
 const grid = document.getElementById('grid'), detail = document.getElementById('detail');
 const q = document.getElementById('q'), countEl = document.getElementById('count');
-let curFilter = 'all';
+let scope = '', smart = '', sortKey = 'name', density = 'comfortable';
 let CUR = -1;
-// 状態保持: 再スキャン/検出/3D生成のたびに iframe が再読込されても 検索/フィルタ/開いてた詳細/スクロール を復元する。
+const sortSel = document.getElementById('sort'), densSel = document.getElementById('density');
+const mainEl = document.getElementById('main');
+// 状態保持: 再スキャン/検出/3D生成のたびに iframe が再読込されても 検索/絞り込み/並び/密度/詳細/スクロール を復元する。
 const SKEY = 'hangar-cat-state';
-function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q: q.value, filter: curFilter, open: (detail.style.display!=='none' && CUR>=0 && DATA[CUR]) ? DATA[CUR].sig : null, scroll: window.scrollY||0 })); }catch(e){} }
+function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q:q.value, scope:scope, smart:smart, sortKey:sortKey, density:density, open:(detail.style.display!=='none'&&CUR>=0&&DATA[CUR])?DATA[CUR].sig:null, scroll:(mainEl?mainEl.scrollTop:0)||0 })); }catch(e){} }
 function showGrid(){ detail.style.display='none'; grid.style.display='grid'; CUR=-1; saveState(); }
-function showDetail(i){ CUR = i; detail.innerHTML = '<button class="back" onclick="showGrid()">← 一覧へ</button>' + DATA[i].detail; grid.style.display='none'; detail.style.display='block'; scrollTo(0,0); saveState(); }
+function showDetail(i){ CUR=i; detail.innerHTML='<button class="back" onclick="showGrid()">← 一覧へ</button>'+DATA[i].detail; grid.style.display='none'; detail.style.display='block'; if(mainEl)mainEl.scrollTop=0; saveState(); }
 // 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
-function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig: DATA[i].sig, name: DATA[i].name}, '*'); }catch(e){} }
+function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig:DATA[i].sig, name:DATA[i].name}, '*'); }catch(e){} }
 function hangarReveal(b){ var img=b.parentElement&&b.parentElement.querySelector('img.nsfw'); if(img) img.classList.add('revealed'); b.remove(); }
+// サイドバーのアクション行(スキャン/検出/テンプレ/比較/取込/補完/再スキャン)を親(シェル)へ委譲。
+function hangarAction(a){ try{ (window.parent||window).postMessage({type:'hangar-action', action:a}, '*'); }catch(e){} }
 addEventListener('message',function(e){var m=e.data;if(m&&m.type==='hangar-caps'){document.body.classList.toggle('no-render', m.canRender===false);}});
-grid.innerHTML =DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
+grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
 const cards = [...grid.children];
+function matchSmart(c){
+  if(!smart) return true;
+  var t=' '+c.dataset.tags+' ';
+  if(smart==='shader') return t.includes(' poiyomi ')||t.includes(' liltoon ');
+  if(smart==='nobooth') return !t.includes(' booth ');
+  return t.includes(' '+smart+' ');
+}
 function applyFilter(){
-  const term = q.value.trim().toLowerCase();
-  let shown = 0;
-  for (const c of cards){
-    const okText = !term || c.dataset.name.includes(term);
-    const okTag = curFilter==='all' || (' '+c.dataset.tags+' ').includes(' '+curFilter+' ');
-    const vis = okText && okTag;
-    c.style.display = vis ? '' : 'none';
-    if (vis) shown++;
+  var term=q.value.trim().toLowerCase(); var shown=0;
+  for(const c of cards){
+    var okText=!term||c.dataset.name.includes(term);
+    var okScope=!scope||(' '+c.dataset.tags+' ').includes(' '+scope+' ');
+    var vis=okText&&okScope&&matchSmart(c);
+    c.style.display=vis?'':'none'; if(vis)shown++;
   }
-  countEl.textContent = shown + ' / ' + cards.length + ' 件';
+  countEl.textContent=shown+' / '+cards.length+' 件';
 }
-q.addEventListener('input', ()=>{ applyFilter(); saveState(); });
-for (const b of document.querySelectorAll('.filters button')){
-  b.addEventListener('click', ()=>{
-    document.querySelectorAll('.filters button').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); curFilter = b.dataset.f; applyFilter(); saveState();
+function applySort(){
+  var order=cards.map(function(_c,i){return i;});
+  order.sort(function(a,b){
+    var A=DATA[a],B=DATA[b];
+    if(sortKey==='size') return (B.sizeBytes||0)-(A.sizeBytes||0)||A.name.localeCompare(B.name);
+    if(sortKey==='dup') return (B.copyCount||0)-(A.copyCount||0)||A.name.localeCompare(B.name);
+    return A.name.localeCompare(B.name);
   });
+  order.forEach(function(i){ grid.appendChild(cards[i]); });
 }
-let _scrollT; addEventListener('scroll', ()=>{ clearTimeout(_scrollT); _scrollT=setTimeout(saveState, 200); });
-// 読込時の復元: 保存していた検索/フィルタを当て、#open=sig(3D生成の結果復帰)を最優先、無ければ前回の詳細/スクロール。
+function setScope(s){ scope=s||''; document.querySelectorAll('.srow.scope').forEach(function(x){x.classList.toggle('on',x.dataset.scope===scope);}); }
+function setSmart(s){ smart=(smart===s)?'':s; document.querySelectorAll('.srow.sl').forEach(function(x){x.classList.toggle('on',x.dataset.sl===smart);}); }
+document.querySelectorAll('.srow.scope').forEach(function(b){ b.addEventListener('click',function(){ setScope(b.dataset.scope); applyFilter(); saveState(); }); });
+document.querySelectorAll('.srow.sl').forEach(function(b){ b.addEventListener('click',function(){ setSmart(b.dataset.sl); applyFilter(); saveState(); }); });
+document.querySelectorAll('.srow.act').forEach(function(b){ b.addEventListener('click',function(){ hangarAction(b.dataset.act); }); });
+q.addEventListener('input',function(){ applyFilter(); saveState(); });
+if(sortSel) sortSel.addEventListener('change',function(){ sortKey=sortSel.value; applySort(); saveState(); });
+if(densSel) densSel.addEventListener('change',function(){ density=densSel.value; document.body.classList.toggle('compact',density==='compact'); saveState(); });
+var _scrollT; if(mainEl) mainEl.addEventListener('scroll',function(){ clearTimeout(_scrollT); _scrollT=setTimeout(saveState,200); });
+// 読込時の復元: 検索/絞り込み/並び/密度を当て、#open=sig(3D生成後の復帰)を最優先、無ければ前回の詳細/スクロール。
 (function restore(){
-  let st=null; try{ st=JSON.parse(localStorage.getItem(SKEY)||'null'); }catch(e){}
-  if (st){
-    if (st.q) q.value = st.q;
-    if (st.filter){ curFilter = st.filter; document.querySelectorAll('.filters button').forEach(x=>x.classList.toggle('on', x.dataset.f===curFilter)); }
+  var st=null; try{ st=JSON.parse(localStorage.getItem(SKEY)||'null'); }catch(e){}
+  if(st){
+    if(st.q)q.value=st.q;
+    // scope/smart は対応するサイドバー行が今も存在する時だけ復元する。件数が0になって行が消えた状態に
+    // 固着するとグリッドが全消え(=ライブラリが消えたように見える)ため、行が無ければ解除にフォールバック。
+    if(st.scope!=null){ var sb=document.querySelector('.srow.scope[data-scope="'+st.scope+'"]'); setScope(sb?st.scope:''); }
+    if(st.smart){ var sm=document.querySelector('.srow.sl[data-sl="'+st.smart+'"]'); if(sm){ smart=st.smart; document.querySelectorAll('.srow.sl').forEach(function(x){x.classList.toggle('on',x.dataset.sl===smart);}); } else { smart=''; } }
+    if(st.sortKey){ sortKey=st.sortKey; if(sortSel)sortSel.value=sortKey; }
+    if(st.density){ density=st.density; if(densSel)densSel.value=density; document.body.classList.toggle('compact',density==='compact'); }
   }
-  applyFilter();
+  applySort(); applyFilter();
   var hm=/^#open=(.+)$/.exec(location.hash||''); var hs=hm?decodeURIComponent(hm[1]):null;
-  if (hs){ var i=DATA.findIndex(function(d){return d.sig===hs;}); if(i>=0){ showDetail(i); return; } }
-  if (st && st.open){ var j=DATA.findIndex(function(d){return d.sig===st.open;}); if(j>=0){ showDetail(j); return; } }
-  if (st && st.scroll){ scrollTo(0, st.scroll); }
+  if(hs){ var i=DATA.findIndex(function(d){return d.sig===hs;}); if(i>=0){ showDetail(i); return; } }
+  if(st&&st.open){ var j=DATA.findIndex(function(d){return d.sig===st.open;}); if(j>=0){ showDetail(j); return; } }
+  if(st&&st.scroll&&mainEl){ mainEl.scrollTop=st.scroll; }
 })();
 </script></body></html>`;
 }
