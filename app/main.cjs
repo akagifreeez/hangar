@@ -316,6 +316,17 @@ ipcMain.handle('render-capabilities', async () => {
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;   // 2つ目のインスタンスは窓を作らず終了
   createWindow();
+  // 旧フォーマット(サイドバー無し)のカタログが残っていたら、新フォーマットへ自動再生成する。
+  // これをしないと、UI更新後に古い gui-catalog.html を読み込み「ツールバー2つ＋サイドバー無し」になる。
+  if (!SMOKE) {
+    try {
+      if (fs.existsSync(CATALOG)) {
+        let head = '';
+        try { head = fs.readFileSync(CATALOG, 'utf8').slice(0, 20000); } catch { /* 読めなければ再生成に倒す */ }
+        if (!head.includes('#side{')) { withJob(async () => { await regen(); }); }
+      }
+    } catch { /* 失敗しても通常フローで続行 */ }
+  }
   // URL付きでコールド起動された場合、カタログ読込後に取り込みを実行。
   if (pendingDeepLink) {
     win.webContents.once('did-finish-load', () => { const u = pendingDeepLink; pendingDeepLink = null; handleDeepLink(u); });
