@@ -152,6 +152,12 @@ export class Catalog {
         PRIMARY KEY (file_path, booth_item_id)
       );
       CREATE INDEX IF NOT EXISTS idx_booth_links_item ON booth_links(booth_item_id);
+
+      -- ♡ お気に入り(ユーザーの独自コレクション)。商品は内容署名(sig=GUID集合md5)で識別＝重複コピー/再スキャンでも安定。
+      CREATE TABLE IF NOT EXISTS favorites (
+        sig      TEXT PRIMARY KEY NOT NULL,
+        added_at INTEGER NOT NULL
+      );
     `);
     // 既存DB(列追加前)への後付けマイグレーション。
     // ※ cover_guid/preview_dir が抜けると upsert が「no column named cover_guid」で全件失敗するので必須。
@@ -436,6 +442,24 @@ export class Catalog {
   allBoothLinks(): { file_path: string; booth_item_id: number }[] {
     return this.db.prepare('SELECT file_path, booth_item_id FROM booth_links')
       .all() as unknown as { file_path: string; booth_item_id: number }[];
+  }
+
+  // ---------- ♡ お気に入り ----------
+
+  favoriteSigs(): string[] {
+    return (this.db.prepare('SELECT sig FROM favorites').all() as unknown as { sig: string }[]).map(r => r.sig);
+  }
+  // fav を明示指定して設定(冪等)。GUIは楽観更新＋この永続化(再生成なし)。
+  setFavorite(sig: string, fav: boolean): void {
+    if (fav) this.db.prepare('INSERT OR IGNORE INTO favorites (sig, added_at) VALUES (?, ?)').run(sig, Date.now());
+    else this.db.prepare('DELETE FROM favorites WHERE sig = ?').run(sig);
+  }
+  // トグルして新状態を返す。
+  toggleFavorite(sig: string): boolean {
+    const ex = this.db.prepare('SELECT sig FROM favorites WHERE sig = ?').get(sig);
+    if (ex) { this.db.prepare('DELETE FROM favorites WHERE sig = ?').run(sig); return false; }
+    this.db.prepare('INSERT INTO favorites (sig, added_at) VALUES (?, ?)').run(sig, Date.now());
+    return true;
   }
 
   close(): void { this.db.close(); }

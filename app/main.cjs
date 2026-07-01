@@ -307,6 +307,12 @@ ipcMain.handle('booth-enrich-all', () => withJob(async () => {
   if (code === 0) await regen();
   return { ok: code === 0, code, tail };
 }));
+// ♡ お気に入りの永続化。カタログ側は楽観更新済みなので再生成しない(fire-and-forget)。
+ipcMain.handle('set-favorite', async (_e, sig, fav) => {
+  if (typeof sig !== 'string' || !sig) return { ok: false };
+  const { code } = await runCli(['fav', sig, fav ? '--on' : '--off', '--json']);
+  return { ok: code === 0 };
+});
 // 3D生成(方式A)が使えるか= Unity + lilToon が見つかるか
 ipcMain.handle('render-capabilities', async () => {
   const r = await runCliJson(['caps']);

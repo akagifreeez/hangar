@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('hangar', {
   restoreTemplate: (templateDir, projectDir, force) => ipcRenderer.invoke('restore-template', templateDir, projectDir, force),
   importAe: (dir, scan) => ipcRenderer.invoke('import-ae', dir, scan),
   boothEnrichAll: () => ipcRenderer.invoke('booth-enrich-all'),
+  setFavorite: (sig, fav) => ipcRenderer.invoke('set-favorite', sig, fav),
   onStatus: (cb) => ipcRenderer.on('status', (_e, m) => cb(m)),
   onCatalogUrl: (cb) => ipcRenderer.on('catalog-url', (_e, u) => cb(u)),
 });

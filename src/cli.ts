@@ -256,6 +256,7 @@ async function main(): Promise<void> {
         const boothItemsById = new Map(cat.allBoothItems().map(b => [b.booth_item_id, b]));
         const boothByPath = new Map<string, BoothItemRow>();
         for (const lk of cat.allBoothLinks()) { const bi = boothItemsById.get(lk.booth_item_id); if (bi) boothByPath.set(lk.file_path, bi); }
+        const favSet = new Set(cat.favoriteSigs());
         // 版グループ: ファイル名から版サフィックス(_v1.2 / .1.0 等)を除いた基底名で束ね、中身(sig)が違うものを「別の版」とみなす
         const verBase = (name: string) => name.replace(/\.unitypackage$/i, '').replace(/[ _\-]*v?\d+([._]\d+)*$/i, '').toLowerCase().trim();
         const byBase = new Map<string, Product[]>();
@@ -301,7 +302,7 @@ async function main(): Promise<void> {
           if (boothThumbRel) { cardImg = boothThumbRel; imgKind = 'booth'; }
           else if (heroUri) { cardImg = heroUri; imgKind = 'local'; }
           else if (cover) { cardImg = cover; imgKind = 'local'; }
-          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc, boothImages), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount, filePath: r.file_path };
+          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc, boothImages), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount, filePath: r.file_path, fav: favSet.has(prod.sig) };
         });
         writeFileSync(out, renderApp(data, products.length, cat.allProjects().length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -506,6 +507,19 @@ async function main(): Promise<void> {
         console.log(`BOOTHサムネをキャッシュ中… (${items.length} 件対象)`);
         const r = await cacheBoothThumbs(items, cacheDir);
         console.log(`サムネ: ${r.ok} 取得(新規含む) / ${r.skip} 既存 → ${join(cacheDir, 'booth-thumbs')}`);
+        break;
+      }
+      case 'fav': {
+        // ♡ お気に入りのトグル/設定(sig=内容署名単位)。GUIは楽観更新後にこれで永続化(--on/--off明示、無指定はトグル)。
+        const json = args.includes('--json');
+        const sig = args.find(a => !a.startsWith('--'));
+        if (!sig) return fail('usage: fav <sig> [--on|--off] [--json]');
+        let fav: boolean;
+        if (args.includes('--on')) { cat.setFavorite(sig, true); fav = true; }
+        else if (args.includes('--off')) { cat.setFavorite(sig, false); fav = false; }
+        else fav = cat.toggleFavorite(sig);
+        if (json) console.log(JSON.stringify({ sig, fav }));
+        else console.log(`♡ ${fav ? '追加' : '解除'}: ${sig}`);
         break;
       }
       case 'import-booth': {
@@ -1037,7 +1051,7 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
   `<div class="chips" style="margin-top:8px">${chips}</div>`;
 }
 
-function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number; filePath: string }[], count: number, projectCount = 0): string {
+function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number; filePath: string; fav: boolean }[], count: number, projectCount = 0): string {
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
   // サイドバー/インサイトの件数は生成時に data から集計(=正確・追加IPC/フレーム跨ぎ同期なし)。tags は空白区切りの素文字列。
   const hasTag = (t: string, tag: string) => (' ' + t + ' ').includes(' ' + tag + ' ');
@@ -1049,6 +1063,7 @@ function renderApp(data: { card: string; detail: string; name: string; tags: str
     shader: data.filter(d => hasTag(d.tags, 'poiyomi') || hasTag(d.tags, 'liltoon')).length,
     nobooth: data.filter(d => !hasTag(d.tags, 'booth')).length,
   };
+  const favCount = data.filter(d => d.fav).length;
   const CATS: [string, string][] = [['model', '3Dモデル'], ['tool', 'ツール'], ['animation', 'アニメ'], ['material', 'マテリアル'], ['other', 'その他']];
   const scopeRows = `<button class="srow scope on" data-scope="">すべて<span class="c">${count}</span></button>` +
     CATS.map(([c, label]) => { const n = catCount(c); return n ? `<button class="srow scope" data-scope="cat-${c}">${label}<span class="c">${n}</span></button>` : ''; }).join('');
@@ -1087,12 +1102,15 @@ body{background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-seri
 body.compact .grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;padding:12px}
 .card{position:relative;background:#1e1e24;border:1px solid #2a2a32;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .1s}
 .card:hover{border-color:#4a6cf7}
-.genbtn{position:absolute;top:6px;right:40px;background:#4a6cf7e6;border:0;color:#fff;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
+.genbtn{position:absolute;top:6px;right:70px;background:#4a6cf7e6;border:0;color:#fff;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
 .card:hover .genbtn,.card:focus-within .genbtn,.genbtn:focus{opacity:1}
 .genbtn:hover{background:#5a78ff}
-.pcbtn{position:absolute;top:6px;right:6px;background:#3a2f23e6;border:0;color:#e7c89a;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
+.pcbtn{position:absolute;top:6px;right:38px;background:#3a2f23e6;border:0;color:#e7c89a;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
 .card:hover .pcbtn,.card:focus-within .pcbtn,.pcbtn:focus{opacity:1}
 .pcbtn:hover{background:#4a3d2c}
+.favbtn{position:absolute;top:6px;right:6px;background:#00000066;border:0;color:#fff;border-radius:99px;width:26px;height:24px;font-size:14px;line-height:1;cursor:pointer;z-index:2;padding:0}
+.favbtn.on{color:#ff6b8a}
+.favbtn:hover{background:#000000aa}
 .genbtn-d{background:#4a6cf7;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer;margin-left:10px}
 .genbtn-d:hover{background:#5a78ff}
 body.no-render .genbtn{opacity:.32;filter:grayscale(1)}
@@ -1197,6 +1215,7 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
   ${slRow('shader', '🟣 シェーダ要注意', sl.shader)}
   ${slRow('nobooth', '🛒 BOOTH情報なし', sl.nobooth)}
   <div class="sgrp">マイリスト</div>
+  <button class="srow sl" data-sl="fav">♡ お気に入り<span class="c" id="favc">${favCount}</span></button>
   <button class="srow act" data-act="template-save">💾 セットアップを保存</button>
   <button class="srow act" data-act="template-restore">♻ テンプレを復元</button>
   <div class="sgrp">プロジェクト</div>
@@ -1237,6 +1256,8 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
 const DATA = ${json};
 const grid = document.getElementById('grid'), detail = document.getElementById('detail');
 const q = document.getElementById('q'), countEl = document.getElementById('count');
+// ♡ お気に入り: sig集合を client で保持(トグルは楽観更新＝重い再生成なし、永続はhangar-favで親へ)。
+const favSet = new Set(DATA.filter(function(d){return d.fav;}).map(function(d){return d.sig;}));
 let scope = '', smart = '', sortKey = 'name', density = 'comfortable', facets = [];
 let CUR = -1;
 const sortSel = document.getElementById('sort'), densSel = document.getElementById('density');
@@ -1260,14 +1281,22 @@ function hangarAction(a){ try{ (window.parent||window).postMessage({type:'hangar
 function hangarSwap(el){ var m=document.getElementById('dmain'); if(m&&el&&el.dataset.full){ m.src=el.dataset.full; } var s=el&&el.parentElement; if(s)s.querySelectorAll('.dsth').forEach(function(x){x.classList.remove('on');}); if(el)el.classList.add('on'); }
 // 取り込み前チェックを親(シェル)へ委譲。対象商品の.unitypackageパスを渡す(カード🛡/詳細🛡)。
 function hangarDiff(i){ if(i==null||i<0||!DATA[i]||!DATA[i].filePath)return; try{ (window.parent||window).postMessage({type:'hangar-diff', path:DATA[i].filePath, name:DATA[i].name}, '*'); }catch(e){} }
+// ♡ お気に入りトグル: client の favSet を即更新(カードの♡＋件数)し、親へ永続を依頼(重い再生成なし)。
+function hangarFav(i){ if(i==null||i<0||!DATA[i])return; var sig=DATA[i].sig; var nowFav=!favSet.has(sig); if(nowFav)favSet.add(sig); else favSet.delete(sig); DATA[i].fav=nowFav;
+  var card=grid.querySelector('.card[data-sig="'+sig+'"]'); if(card){ var b=card.querySelector('.favbtn'); if(b){ b.classList.toggle('on',nowFav); b.textContent=nowFav?'♥':'♡'; } }
+  var fc=document.getElementById('favc'); if(fc)fc.textContent=favSet.size;
+  if(smart==='fav')applyFilter();
+  try{ (window.parent||window).postMessage({type:'hangar-fav', sig:sig, fav:nowFav}, '*'); }catch(e){}
+}
 addEventListener('message',function(e){var m=e.data;if(m&&m.type==='hangar-caps'){document.body.classList.toggle('no-render', m.canRender===false);}});
-grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'<button class="pcbtn" title="取り込み前チェック(既存プロジェクトとの衝突/ピンク危険)" onclick="event.stopPropagation();hangarDiff('+i+')">🛡</button>'+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
+grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" data-sig="'+d.sig+'" onclick="showDetail('+i+')">'+d.card+'<button class="favbtn'+(d.fav?' on':'')+'" title="お気に入り" onclick="event.stopPropagation();hangarFav('+i+')">'+(d.fav?'♥':'♡')+'</button><button class="pcbtn" title="取り込み前チェック(既存プロジェクトとの衝突/ピンク危険)" onclick="event.stopPropagation();hangarDiff('+i+')">🛡</button>'+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
 if(backdrop) backdrop.addEventListener('click', showGrid);
 // カタログ(iframe)にフォーカスがある時の Ctrl+K を親のコマンドパレットへ転送(shell側は自frameしか拾えないため)。
 document.addEventListener('keydown',function(e){ if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&(e.key==='k'||e.key==='K')){ e.preventDefault(); hangarAction('palette'); } });
 const cards = [...grid.children];
 function matchSmart(c){
   if(!smart) return true;
+  if(smart==='fav') return favSet.has(c.dataset.sig);
   var t=' '+c.dataset.tags+' ';
   if(smart==='shader') return t.includes(' poiyomi ')||t.includes(' liltoon ');
   if(smart==='nobooth') return !t.includes(' booth ');

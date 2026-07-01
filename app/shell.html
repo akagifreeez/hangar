@@ -308,6 +308,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     if (m && m.type === 'hangar-render' && (typeof m.sig === 'string' || typeof m.name === 'string')) runRender({ sig: m.sig, name: m.name });
     else if (m && m.type === 'hangar-action' && typeof m.action === 'string') handleSidebarAction(m.action);
     else if (m && m.type === 'hangar-diff' && typeof m.path === 'string') openDiff(m.path);
+    else if (m && m.type === 'hangar-fav' && typeof m.sig === 'string') { try { window.hangar.setFavorite(m.sig, !!m.fav); } catch (e) {} }
   });
   // カタログ左サイドバー(iframe内)のアクション行 → 既存ハンドラへ委譲。ボタン要素は #hidden-actions に温存。
   // 各ハンドラは内部で BUSY を見るので二重ガードしない（help はいつでも可）。
