@@ -257,6 +257,14 @@ async function main(): Promise<void> {
         const boothByPath = new Map<string, BoothItemRow>();
         for (const lk of cat.allBoothLinks()) { const bi = boothItemsById.get(lk.booth_item_id); if (bi) boothByPath.set(lk.file_path, bi); }
         const favSet = new Set(cat.favoriteSigs());
+        // スキャン済みライブラリ根(GUIが記憶した保存先)。file_path をこの根に照合して「どのライブラリか」を表示する。
+        // main.cjs が HANGAR_LIBRARY_DIRS(JSON配列)で渡す。未設定でも file_path の親フォルダにフォールバックするので必須ではない。
+        let libraryDirs: string[] = [];
+        try { libraryDirs = JSON.parse(process.env.HANGAR_LIBRARY_DIRS ?? '[]') as string[]; } catch { libraryDirs = []; }
+        // 登録済みプロジェクト(detect --save 済み)。サイドバーに一覧表示＋クリックで「そのプロジェクトに導入済みの商品」に絞り込む。
+        const regProjects = cat.allProjects();
+        const projList = regProjects.map((p, i) => ({ key: `p${i}`, path: p.path, name: p.name || basename(p.path) || p.path, count: 0 }));
+        const projKeyByPath = new Map(projList.map(p => [p.path, p.key]));
         // 版グループ: ファイル名から版サフィックス(_v1.2 / .1.0 等)を除いた基底名で束ね、中身(sig)が違うものを「別の版」とみなす
         const verBase = (name: string) => name.replace(/\.unitypackage$/i, '').replace(/[ _\-]*v?\d+([._]\d+)*$/i, '').toLowerCase().trim();
         const byBase = new Map<string, Product[]>();
@@ -302,9 +310,19 @@ async function main(): Promise<void> {
           if (boothThumbRel) { cardImg = boothThumbRel; imgKind = 'booth'; }
           else if (heroUri) { cardImg = heroUri; imgKind = 'local'; }
           else if (cover) { cardImg = cover; imgKind = 'local'; }
-          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc, boothImages), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount, filePath: r.file_path, fav: favSet.has(prod.sig) };
+          // プレハブ数(.unitypackage内の.prefab数)。>1 なら「複数プレハブ入り」を表示し、3Dは切替可(方式Aで焼いてあれば)。
+          let prefabCount = 0;
+          try { prefabCount = (JSON.parse(r.kind_breakdown) as Record<string, number>).prefab ?? 0; } catch { /* 壊れ→0 */ }
+          // 保管場所(ライブラリ): 各物理コピーのパスを、スキャン済みライブラリ根に照合してラベル化。
+          const locations = prod.copies.map(c => libraryOf(c, libraryDirs));
+          const libLabel = locations[0]?.label ?? '';
+          const libFull = locations[0]?.full ?? r.file_path;
+          // このカードが導入済みの登録プロジェクトのキー(絞り込み用)。prod.projects は unity_projects と同一パス。
+          const projKeys = prod.projects.map(pp => projKeyByPath.get(pp.path)).filter((k): k is string => !!k);
+          for (const k of projKeys) { const pl = projList.find(p => p.key === k); if (pl) pl.count++; }
+          return { card: renderCard(prod, cardImg, imgKind, bc, prefabCount, libLabel, libFull), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc, boothImages, locations, prefabCount), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount, filePath: r.file_path, fav: favSet.has(prod.sig), proj: projKeys.join(' ') };
         });
-        writeFileSync(out, renderApp(data, products.length, cat.allProjects().length), 'utf8');
+        writeFileSync(out, renderApp(data, products.length, projList), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
         break;
       }
@@ -691,6 +709,26 @@ function toFileUrl(outDir: string, p: string): string {
   const rel = relative(outDir, p).replace(/\\/g, '/');
   return /^[a-zA-Z]:\//.test(rel) ? 'file:///' + rel : rel;
 }
+// 保管場所ラベル: file_path を「スキャン済みライブラリ根」に照合し、どのライブラリの何処かを求める。
+//  - 最長一致するライブラリ根があれば label=根のフォルダ名 / sub=根からの相対 / root=根フルパス。
+//  - 一致無し(取込物/ドロップ等)は直上フォルダ名にフォールバック。full は常に元のフルパス。
+function libraryOf(filePath: string, libraryDirs: string[]): { label: string; sub: string; full: string; root: string } {
+  const normP = filePath.replace(/\\/g, '/');
+  const normPl = normP.toLowerCase();
+  let best = '';
+  for (const d of libraryDirs) {
+    const nd = d.replace(/\\/g, '/').replace(/\/+$/, '');
+    const ndl = nd.toLowerCase();
+    if ((normPl === ndl || normPl.startsWith(ndl + '/')) && nd.length > best.length) best = nd;
+  }
+  if (best) {
+    const sub = normP.slice(best.length).replace(/^\/+/, '');
+    return { label: basename(best) || best, sub, full: normP, root: best };
+  }
+  const parent = dirname(normP);
+  return { label: basename(parent) || parent, sub: basename(normP), full: normP, root: parent };
+}
+
 // 既にキャッシュ済みサムネ(画像0=カード用)があれば catalog 出力先からの参照URLを返す(無ければ空)。
 function findCachedThumbRel(cacheDir: string, outDir: string, id: number): string {
   for (const ext of ['jpg', 'png', 'webp', 'gif']) {
@@ -964,7 +1002,7 @@ function formatCompareHtml(r: CompareResult): string {
 
 // 画像: imgKind='booth'(キャッシュ済BOOTHサムネ・object-fit:cover) / 'local'(preview/忠実3D・contain) / ''(無=プレースホルダ)。
 // フォールバック解決は呼び出し側(catalog data-map)。R-18(booth.adult)は blur＋タップ表示でポートフォリオ誤露出を防ぐ。
-function renderCard(p: Product, imgSrc: string, imgKind: string, booth: BoothCard | null = null): string {
+function renderCard(p: Product, imgSrc: string, imgKind: string, booth: BoothCard | null = null, prefabCount = 0, libLabel = '', libFull = ''): string {
   const r = p.rep;
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}・無駄${mb(p.wastedBytes)}</span>` : '';
   const badge = p.projects.length ? `<div class="cb">導入 ${p.projects.length}プロジェクト</div>` : `<div class="cb none">未導入</div>`;
@@ -974,15 +1012,18 @@ function renderCard(p: Product, imgSrc: string, imgKind: string, booth: BoothCar
     ? `<img src="${imgSrc}" loading="lazy"${cls ? ` class="${cls}"` : ''}>` +
       (adult ? `<button class="nsfwtag" title="R-18 — クリックで表示" onclick="event.stopPropagation();hangarReveal(this)">🔞 タップで表示</button>` : '')
     : `<div class="ph cat-${esc(p.category)}"><span class="phn">${esc(r.file_name.replace(/\.unitypackage$/i, '').slice(0, 2) || '?')}</span><span class="phl">画像準備中</span></div>`;
+  const prefabTag = prefabCount > 1 ? ` ・ <span class="pfab" title="この商品には ${prefabCount} 個のプレハブが入っています（3D生成で切替可）">🧩${prefabCount}</span>` : '';
   const boothLine = booth
     ? `<div class="booth" title="BOOTH ${booth.id}${booth.placeholder ? '（メタ未取得）' : ''}">🛒 ${esc(booth.creator || 'BOOTH')}${booth.creator ? ' ・ ' : ''}${esc(booth.typeLabel)}</div>`
     : '';
+  // 保管場所(どのライブラリから読み込んだか)を一目で。フル絵はホバーで。
+  const libRow = libLabel ? `<div class="librow" title="${esc(libFull)}">📁 ${esc(libLabel)}</div>` : '';
   return `<div class="thumb">${catBadge(p.category)}${thumb}</div><div class="cbody"><div class="name">${esc(r.file_name)} ${dup}</div>` +
-    `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${boothLine}${badge}</div>`;
+    `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%${prefabTag}</div>${shaderBadges(r)}${boothLine}${libRow}${badge}</div>`;
 }
 
 // 詳細(右スライドオーバー・2カラム)。左=BOOTH画像カルーセル+忠実3D、右=商品情報+導入台帳+重複/別版。
-function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = [], booth: BoothCard | null = null, boothImages: string[] = []): string {
+function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = [], booth: BoothCard | null = null, boothImages: string[] = [], locations: { label: string; sub: string; full: string; root: string }[] = [], prefabCount = 0): string {
   const r = p.rep;
   const kinds = JSON.parse(r.kind_breakdown) as Record<string, number>;
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
@@ -1013,10 +1054,13 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
     ? `<table class="ledger"><tr><th>プロジェクト</th><th>一致</th><th>パス</th></tr>` +
       p.projects.map(pr => `<tr><td>${esc(pr.name)}</td><td class="pct">${pr.pct}%</td><td class="pth">${esc(pr.path)}</td></tr>`).join('') + `</table>`
     : `<div class="none">どのプロジェクトにも導入されていません</div>`;
-  const copies = p.copyCount > 1
-    ? `<h3>⧉ 重複コピー（${p.copyCount}個・無駄 ${mb(p.wastedBytes)}）</h3><div class="copies">` +
-      p.copies.map(c => `<div class="cp">${esc(c)}</div>`).join('') + `</div>`
-    : '';
+  // 保管場所(どのライブラリから読み込んだか)。単一コピーでも常に表示＝「このファイルはどこに在るか」を必ず示す。
+  //  重複コピーがある時は同じ枠で全コピー＋無駄バイトも見せる(旧「⧉ 重複コピー」節を統合)。
+  const locHead = p.copyCount > 1 ? `📂 保管場所（コピー×${p.copyCount}・無駄 ${mb(p.wastedBytes)}）` : '📂 保管場所（ライブラリ内）';
+  const locList = (locations.length ? locations : p.copies.map(c => ({ label: '', sub: '', full: c, root: '' })));
+  const copies = `<h3>${locHead}</h3><div class="locs">` +
+    locList.map(l => `<div class="loc">${l.label ? `<span class="libchip" title="ライブラリ根: ${esc(l.root)}">📁 ${esc(l.label)}</span>` : ''}<span class="locpath">${esc(l.full)}</span></div>`).join('') +
+    `</div>`;
   const gal = gallery.length ? `<div class="gallery">${gallery.map(g => `<img src="${g}" loading="lazy">`).join('')}</div>` : `<div class="none">preview.png なし</div>`;
   const verSec = versions.length
     ? `<h3>🔀 別の版がライブラリにあります（${versions.length}）</h3><div class="copies">` +
@@ -1039,7 +1083,7 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
     `<div class="dleft">${heroBox}${strip}<div class="dacts">${view3d}${genBtn}${preimport}</div></div>` +
     `<div class="dright">` +
       `<h2>${booth ? esc(booth.name) : esc(r.file_name)} ${dup}</h2>` +
-      `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}` +
+      `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%${prefabCount > 1 ? ` ・ <span class="pfab" title="複数プレハブ入り。3Dを生成すると各プレハブを切り替えて見られます">🧩 プレハブ${prefabCount}個</span>` : ''}</div>${shaderBadges(r)}` +
       `<div class="dfn">${esc(r.file_name)}</div>` +
       boothSec +
       `<h3>🎯 導入先（取り込み後の追跡）</h3>${inst}` +
@@ -1051,8 +1095,9 @@ function renderDetail(p: Product, treeHtml: string, gallery: string[], render: {
   `<div class="chips" style="margin-top:8px">${chips}</div>`;
 }
 
-function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number; filePath: string; fav: boolean }[], count: number, projectCount = 0): string {
+function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number; filePath: string; fav: boolean; proj: string }[], count: number, projList: { key: string; path: string; name: string; count: number }[] = []): string {
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
+  const projectCount = projList.length;
   // サイドバー/インサイトの件数は生成時に data から集計(=正確・追加IPC/フレーム跨ぎ同期なし)。tags は空白区切りの素文字列。
   const hasTag = (t: string, tag: string) => (' ' + t + ' ').includes(' ' + tag + ' ');
   const catCount = (c: string) => data.filter(d => d.category === c).length;
@@ -1069,7 +1114,7 @@ function renderApp(data: { card: string; detail: string; name: string; tags: str
     CATS.map(([c, label]) => { const n = catCount(c); return n ? `<button class="srow scope" data-scope="cat-${c}">${label}<span class="c">${n}</span></button>` : ''; }).join('');
   const slRow = (key: string, label: string, n: number) => n ? `<button class="srow sl" data-sl="${key}">${label}<span class="c">${n}</span></button>` : '';
   const insight = `${count}商品` + (projectCount ? ` ・ 🎯 ${projectCount}プロジェクトに導入追跡` : '') + (sl.dup ? ` ・ ⧉ ${sl.dup}件の重複` : '') + (sl.shader ? ` ・ 🟣 ${sl.shader}件 要シェーダ` : '');
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  return `<!doctype html><!--hangar-catalog v=2 feat=proj+lib+prefab--><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hangar カタログ</title><style>
 :root{color-scheme:dark}
 *{box-sizing:border-box}
@@ -1088,6 +1133,10 @@ body{background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-seri
 .srow.prim{background:#23314f;color:#cfe0ff;margin:2px 0 4px;font-weight:600}
 .srow.prim:hover{background:#2c3e63}
 .sgrp{font-size:11px;color:#777;padding:11px 10px 3px;margin-top:2px}
+.srow.proj{color:#c7cdda;font-size:12px;padding:5px 10px 5px 14px}
+.srow.proj .c{background:#2a2a32;border-radius:9px;padding:0 6px;min-width:18px;text-align:center;color:#9aa}
+.srow.proj.on .c{background:#3a4c86;color:#dfe6ff}
+.sempty{font-size:10.5px;color:#6a6a72;padding:4px 12px 6px;line-height:1.5}
 .sfoot{font-size:10px;color:#6a6a72;padding:12px 10px;line-height:1.6;border-top:1px solid #2a2a32;margin-top:10px}
 #topbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 18px;border-bottom:1px solid #2a2a32;position:sticky;top:0;background:#16161a;z-index:6}
 #topbar select{background:#23232b;border:1px solid #3a3a44;color:#ddd;border-radius:7px;padding:6px 8px;font-size:12px;cursor:pointer}
@@ -1201,6 +1250,14 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .btn3d:hover{background:#5a78ff}
 .copies{font-size:11px;font-family:ui-monospace,Consolas,monospace}
 .cp{color:#cfcfd6;padding:2px 0;border-bottom:1px solid #222228;word-break:break-all}
+/* カード: 保管場所(どのライブラリか)＋プレハブ数チップ */
+.librow{font-size:11px;color:#8a93a6;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pfab{color:#c6a6e7}
+/* 詳細: 保管場所リスト(ライブラリchip＋フルパス) */
+.locs{display:flex;flex-direction:column;gap:5px}
+.loc{display:flex;align-items:baseline;gap:8px;padding:3px 0;border-bottom:1px solid #222228}
+.libchip{flex:0 0 auto;background:#25303f;color:#a6c9e7;border-radius:6px;padding:1px 7px;font-size:11px}
+.locpath{color:#b9bcc6;font-size:11px;font-family:ui-monospace,Consolas,monospace;word-break:break-all}
 footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
 </style></head><body>
 <div id="wrap">
@@ -1220,6 +1277,9 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
   <button class="srow act" data-act="template-restore">♻ テンプレを復元</button>
   <div class="sgrp">プロジェクト</div>
   <button class="srow act" data-act="detect">＋ プロジェクトを登録</button>
+  ${projList.length
+    ? projList.map(p => `<button class="srow proj" data-project="${esc(p.key)}" title="${esc(p.path)}">📁 ${esc(p.name)}<span class="c">${p.count}</span></button>`).join('')
+    : `<div class="sempty">まだ登録なし — 「＋ プロジェクトを登録」で Unity プロジェクトを追加すると、ここに一覧が出て導入済み商品を絞り込めます。</div>`}
   <button class="srow act" data-act="compare">🔀 見くらべる・整理</button>
   <div class="sgrp">もっと</div>
   <button class="srow act" data-act="importAe">📥 他ツールから取込</button>
@@ -1258,7 +1318,7 @@ const grid = document.getElementById('grid'), detail = document.getElementById('
 const q = document.getElementById('q'), countEl = document.getElementById('count');
 // ♡ お気に入り: sig集合を client で保持(トグルは楽観更新＝重い再生成なし、永続はhangar-favで親へ)。
 const favSet = new Set(DATA.filter(function(d){return d.fav;}).map(function(d){return d.sig;}));
-let scope = '', smart = '', sortKey = 'name', density = 'comfortable', facets = [];
+let scope = '', smart = '', sortKey = 'name', density = 'comfortable', facets = [], projFilter = '';
 let CUR = -1;
 const sortSel = document.getElementById('sort'), densSel = document.getElementById('density');
 const facetbtn = document.getElementById('facetbtn'), facetpop = document.getElementById('facetpop');
@@ -1266,7 +1326,7 @@ const mainEl = document.getElementById('main');
 // 状態保持: 再スキャン/検出/3D生成のたびに iframe が再読込されても 検索/絞り込み/並び/密度/詳細/スクロール を復元する。
 const SKEY = 'hangar-cat-state';
 var backdrop = document.getElementById('backdrop');
-function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q:q.value, scope:scope, smart:smart, sortKey:sortKey, density:density, facets:facets, open:(detail.classList.contains('open')&&CUR>=0&&DATA[CUR])?DATA[CUR].sig:null, scroll:(mainEl?mainEl.scrollTop:0)||0 })); }catch(e){} }
+function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q:q.value, scope:scope, smart:smart, proj:projFilter, sortKey:sortKey, density:density, facets:facets, open:(detail.classList.contains('open')&&CUR>=0&&DATA[CUR])?DATA[CUR].sig:null, scroll:(mainEl?mainEl.scrollTop:0)||0 })); }catch(e){} }
 // Phase3: 詳細は右スライドオーバー。グリッドは背後に残す(隠さない)。
 function showGrid(){ detail.classList.remove('open'); if(backdrop)backdrop.classList.remove('open'); CUR=-1; saveState(); }
 function showDetail(i){ CUR=i; detail.innerHTML='<button class="back" onclick="showGrid()">✕ 閉じる</button>'+DATA[i].detail; detail.classList.add('open'); if(backdrop)backdrop.classList.add('open'); detail.scrollTop=0; saveState(); }
@@ -1289,7 +1349,7 @@ function hangarFav(i){ if(i==null||i<0||!DATA[i])return; var sig=DATA[i].sig; va
   try{ (window.parent||window).postMessage({type:'hangar-fav', sig:sig, fav:nowFav}, '*'); }catch(e){}
 }
 addEventListener('message',function(e){var m=e.data;if(m&&m.type==='hangar-caps'){document.body.classList.toggle('no-render', m.canRender===false);}});
-grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" data-sig="'+d.sig+'" onclick="showDetail('+i+')">'+d.card+'<button class="favbtn'+(d.fav?' on':'')+'" title="お気に入り" onclick="event.stopPropagation();hangarFav('+i+')">'+(d.fav?'♥':'♡')+'</button><button class="pcbtn" title="取り込み前チェック(既存プロジェクトとの衝突/ピンク危険)" onclick="event.stopPropagation();hangarDiff('+i+')">🛡</button>'+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
+grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" data-proj="'+(d.proj||'')+'" data-sig="'+d.sig+'" onclick="showDetail('+i+')">'+d.card+'<button class="favbtn'+(d.fav?' on':'')+'" title="お気に入り" onclick="event.stopPropagation();hangarFav('+i+')">'+(d.fav?'♥':'♡')+'</button><button class="pcbtn" title="取り込み前チェック(既存プロジェクトとの衝突/ピンク危険)" onclick="event.stopPropagation();hangarDiff('+i+')">🛡</button>'+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
 if(backdrop) backdrop.addEventListener('click', showGrid);
 // カタログ(iframe)にフォーカスがある時の Ctrl+K を親のコマンドパレットへ転送(shell側は自frameしか拾えないため)。
 document.addEventListener('keydown',function(e){ if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&(e.key==='k'||e.key==='K')){ e.preventDefault(); hangarAction('palette'); } });
@@ -1307,7 +1367,8 @@ function applyFilter(){
   for(const c of cards){
     var okText=!term||c.dataset.name.includes(term);
     var okScope=!scope||(' '+c.dataset.tags+' ').includes(' '+scope+' ');
-    var vis=okText&&okScope&&matchSmart(c);
+    var okProj=!projFilter||(' '+(c.dataset.proj||'')+' ').includes(' '+projFilter+' ');
+    var vis=okText&&okScope&&okProj&&matchSmart(c);
     if(vis&&facets.length){ var ft=' '+c.dataset.tags+' '; for(var fi=0;fi<facets.length;fi++){ if(ft.indexOf(' '+facets[fi]+' ')<0){ vis=false; break; } } }
     c.style.display=vis?'':'none'; if(vis)shown++;
   }
@@ -1325,8 +1386,11 @@ function applySort(){
 }
 function setScope(s){ scope=s||''; document.querySelectorAll('.srow.scope').forEach(function(x){x.classList.toggle('on',x.dataset.scope===scope);}); }
 function setSmart(s){ smart=(smart===s)?'':s; document.querySelectorAll('.srow.sl').forEach(function(x){x.classList.toggle('on',x.dataset.sl===smart);}); }
+// プロジェクト絞り込み(トグル): そのプロジェクトに導入済みの商品だけ表示。もう一度押すと解除。
+function setProj(k){ projFilter=(projFilter===k)?'':k; document.querySelectorAll('.srow.proj').forEach(function(x){x.classList.toggle('on',x.dataset.project===projFilter);}); }
 document.querySelectorAll('.srow.scope').forEach(function(b){ b.addEventListener('click',function(){ setScope(b.dataset.scope); applyFilter(); saveState(); }); });
 document.querySelectorAll('.srow.sl').forEach(function(b){ b.addEventListener('click',function(){ setSmart(b.dataset.sl); applyFilter(); saveState(); }); });
+document.querySelectorAll('.srow.proj').forEach(function(b){ b.addEventListener('click',function(){ setProj(b.dataset.project); applyFilter(); saveState(); }); });
 document.querySelectorAll('.srow.act').forEach(function(b){ b.addEventListener('click',function(){ hangarAction(b.dataset.act); }); });
 q.addEventListener('input',function(){ applyFilter(); saveState(); });
 if(sortSel) sortSel.addEventListener('change',function(){ sortKey=sortSel.value; applySort(); saveState(); });
@@ -1346,6 +1410,8 @@ var _scrollT; if(mainEl) mainEl.addEventListener('scroll',function(){ clearTimeo
     // 固着するとグリッドが全消え(=ライブラリが消えたように見える)ため、行が無ければ解除にフォールバック。
     if(st.scope!=null){ var sb=document.querySelector('.srow.scope[data-scope="'+st.scope+'"]'); setScope(sb?st.scope:''); }
     if(st.smart){ var sm=document.querySelector('.srow.sl[data-sl="'+st.smart+'"]'); if(sm){ smart=st.smart; document.querySelectorAll('.srow.sl').forEach(function(x){x.classList.toggle('on',x.dataset.sl===smart);}); } else { smart=''; } }
+    // プロジェクト絞り込みは、そのプロジェクト行が今も在る時だけ復元(登録解除/再スキャンで消えたら固着させない)。
+    if(st.proj){ var pj=document.querySelector('.srow.proj[data-project="'+st.proj+'"]'); if(pj){ projFilter=st.proj; pj.classList.add('on'); } else { projFilter=''; } }
     if(st.sortKey){ sortKey=st.sortKey; if(sortSel)sortSel.value=sortKey; }
     if(st.density){ density=st.density; if(densSel)densSel.value=density; document.body.classList.toggle('compact',density==='compact'); }
     if(st.facets&&st.facets.length&&facetpop){ st.facets.forEach(function(f){ var cb=facetpop.querySelector('input[data-facet="'+f+'"]'); if(cb)cb.checked=true; }); syncFacets(); }

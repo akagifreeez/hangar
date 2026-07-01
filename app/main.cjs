@@ -75,7 +75,8 @@ function catalogUrl() { return 'file:///' + CATALOG.replace(/\\/g, '/'); }
 // 戻り値 {code, tail}: 終了コード(0=成功)と末尾ログ行(失敗時の原因表示用)。onLine で全行を観測可。
 function runCli(args, onLine) {
   return new Promise((resolve) => {
-    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, ELECTRON_RUN_AS_NODE: '1', UV_THREADPOOL_SIZE: UV_POOL };
+    // HANGAR_LIBRARY_DIRS: catalog が各商品の「保管場所(どのライブラリか)」をラベル化するのに使う(読取専用・任意)。
+    const env = { ...process.env, HANGAR_DB: DB, HANGAR_CACHE: CACHE, HANGAR_LIBRARY_DIRS: JSON.stringify((loadConfig().libraryDirs) || []), ELECTRON_RUN_AS_NODE: '1', UV_THREADPOOL_SIZE: UV_POOL };
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
     let buf = '';
     const tail = [];
@@ -322,14 +323,17 @@ ipcMain.handle('render-capabilities', async () => {
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;   // 2つ目のインスタンスは窓を作らず終了
   createWindow();
-  // 旧フォーマット(サイドバー無し)のカタログが残っていたら、新フォーマットへ自動再生成する。
-  // これをしないと、UI更新後に古い gui-catalog.html を読み込み「ツールバー2つ＋サイドバー無し」になる。
+  // 古いフォーマット/古い機能版のカタログが残っていたら、最新へ自動再生成する。
+  //  ・#side{ 無し = 旧レイアウト(サイドバー無し)。
+  //  ・CATALOG_MARKER 無し = UI/機能を追加した新版より前に生成されたカタログ(プロジェクト一覧/保管場所/プレハブ表示 等が出ない)。
+  // これをしないと、本体を更新しても古い gui-catalog.html を読み込み、新機能が反映されない。
+  const CATALOG_MARKER = 'hangar-catalog v=2';
   if (!SMOKE) {
     try {
       if (fs.existsSync(CATALOG)) {
         let head = '';
         try { head = fs.readFileSync(CATALOG, 'utf8').slice(0, 20000); } catch { /* 読めなければ再生成に倒す */ }
-        if (!head.includes('#side{')) { withJob(async () => { await regen(); }); }
+        if (!head.includes('#side{') || !head.includes(CATALOG_MARKER)) { withJob(async () => { await regen(); }); }
       }
     } catch { /* 失敗しても通常フローで続行 */ }
   }
