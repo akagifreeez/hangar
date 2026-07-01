@@ -74,6 +74,7 @@ export class Catalog {
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
+      PRAGMA busy_timeout = 3000;   -- ♡永続化(別プロセス)が scan/regen の書込と衝突しても待って続行(SQLITE_BUSY回避)
       CREATE TABLE IF NOT EXISTS packages (
         id            INTEGER PRIMARY KEY,
         file_path     TEXT NOT NULL UNIQUE,
