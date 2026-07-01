@@ -295,12 +295,13 @@ async function main(): Promise<void> {
           const sibs = (byBase.get(verBase(r.file_name)) || []).filter(o => o.sig !== prod.sig);
           const versions = sibs.map(o => ({ name: o.rep.file_name, installed: o.projects.length > 0 }));
           // カード画像のフォールバック: BOOTHサムネ(キャッシュfile://) → 忠実3D hero → preview → 種別プレースホルダ
-          const boothThumbRel = bc ? findCachedThumbRel(cacheDir, outDir, bc.id) : '';
+          const boothImages = bc ? findCachedImages(cacheDir, outDir, bc.id) : [];
+          const boothThumbRel = boothImages[0] ?? '';
           let cardImg = '', imgKind = '';
           if (boothThumbRel) { cardImg = boothThumbRel; imgKind = 'booth'; }
           else if (heroUri) { cardImg = heroUri; imgKind = 'local'; }
           else if (cover) { cardImg = cover; imgKind = 'local'; }
-          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount };
+          return { card: renderCard(prod, cardImg, imgKind, bc), detail: renderDetail(prod, tree, gallery, { heroUri, viewerHref, prefabThumbs }, versions, bc, boothImages), name: r.file_name + (bc ? ` ${bc.name} ${bc.creator}` : ''), tags: esc(tags), sig: prod.sig, category: esc(prod.category), sizeBytes: r.size_bytes, copyCount: prod.copyCount, filePath: r.file_path };
         });
         writeFileSync(out, renderApp(data, products.length, cat.allProjects().length), 'utf8');
         console.log(`catalog -> ${out}  (${products.length} unique products from ${cat.allPackages().length} files)`);
@@ -462,10 +463,10 @@ async function main(): Promise<void> {
             const m = await fetchBoothItem(id);
             cat.upsertBoothItem(m, 'booth-api');
             ok++;
-            // サムネを1回だけローカルへキャッシュ(catalogが実画像を表示できるように)。
-            if (m.thumbnailUrl) {
-              const dest = cachedThumbPath(cacheDir, id, m.thumbnailUrl);
-              if (!existsSync(dest) && await downloadImage(m.thumbnailUrl, dest)) thumbOk++;
+            // 商品画像をローカルへキャッシュ(カード＝image0 / 詳細カルーセル＝追加画像)。catalogは file:// 参照。
+            {
+              const urls = m.imageUrls.length ? m.imageUrls : (m.thumbnailUrl ? [m.thumbnailUrl] : []);
+              if (urls.length && await cacheItemImages(cacheDir, id, urls) > 0) thumbOk++;
             }
             console.log(`  ✓ ${id}  ${m.name}  〔${ASSET_TYPE_LABEL[m.assetType]}〕  by ${m.creator || '?'}${m.adult ? '  (R-18)' : ''}`);
           } catch (e) {
@@ -504,7 +505,7 @@ async function main(): Promise<void> {
         if (!items.length) { console.log('(サムネ対象なし — 先に booth-enrich でメタを取得してください)'); break; }
         console.log(`BOOTHサムネをキャッシュ中… (${items.length} 件対象)`);
         const r = await cacheBoothThumbs(items, cacheDir);
-        console.log(`サムネ: ${r.ok} 取得 / ${r.skip} 既存 / ${r.fail} 失敗 → ${join(cacheDir, 'booth-thumbs')}`);
+        console.log(`サムネ: ${r.ok} 取得(新規含む) / ${r.skip} 既存 → ${join(cacheDir, 'booth-thumbs')}`);
         break;
       }
       case 'import-booth': {
@@ -670,16 +671,13 @@ function thumbExt(url: string): string {
   const e = m?.[1];
   return e ? e.toLowerCase().replace('jpeg', 'jpg') : 'jpg';
 }
-function cachedThumbPath(cacheDir: string, id: number, url: string): string {
-  return join(cacheDir, 'booth-thumbs', `${id}.${thumbExt(url)}`);
-}
 // catalog(file://)から参照できるURLを返す。同一ドライブなら相対パス、別ドライブで relative() が
 // 絶対パス(例 D:/...)を返した場合は file:/// 絶対URLに変換する(ドライブ文字をスキームと誤解させない)。
 function toFileUrl(outDir: string, p: string): string {
   const rel = relative(outDir, p).replace(/\\/g, '/');
   return /^[a-zA-Z]:\//.test(rel) ? 'file:///' + rel : rel;
 }
-// 既にキャッシュ済みサムネがあれば catalog 出力先からの参照URLを返す(無ければ空)。
+// 既にキャッシュ済みサムネ(画像0=カード用)があれば catalog 出力先からの参照URLを返す(無ければ空)。
 function findCachedThumbRel(cacheDir: string, outDir: string, id: number): string {
   for (const ext of ['jpg', 'png', 'webp', 'gif']) {
     const p = join(cacheDir, 'booth-thumbs', `${id}.${ext}`);
@@ -687,17 +685,51 @@ function findCachedThumbRel(cacheDir: string, outDir: string, id: number): strin
   }
   return '';
 }
+
+// 詳細のカルーセル用: BOOTH商品画像を複数キャッシュ(image0=<id>.ext / image_k=<id>_k.ext)。上限MAX_IMGS。
+const MAX_IMGS = 6;
+function imgDestPath(cacheDir: string, id: number, idx: number, url: string): string {
+  const ext = thumbExt(url);
+  return join(cacheDir, 'booth-thumbs', idx === 0 ? `${id}.${ext}` : `${id}_${idx}.${ext}`);
+}
+async function cacheItemImages(cacheDir: string, id: number, urls: string[]): Promise<number> {
+  const list = urls.filter(u => /^https?:\/\//i.test(u)).slice(0, MAX_IMGS);
+  let got = 0;
+  for (let i = 0; i < list.length; i++) {
+    const dest = imgDestPath(cacheDir, id, i, list[i]!);
+    if (existsSync(dest)) continue;
+    if (await downloadImage(list[i]!, dest)) got++;
+  }
+  return got;
+}
+// キャッシュ済みのBOOTH画像URL群(詳細カルーセル用)。image0の次に穴があれば打ち切り。
+function findCachedImages(cacheDir: string, outDir: string, id: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < MAX_IMGS; i++) {
+    let found = '';
+    for (const ext of ['jpg', 'png', 'webp', 'gif']) {
+      const p = join(cacheDir, 'booth-thumbs', i === 0 ? `${id}.${ext}` : `${id}_${i}.${ext}`);
+      if (existsSync(p)) { found = toFileUrl(outDir, p); break; }
+    }
+    if (found) out.push(found);
+    else if (i > 0) break;
+  }
+  return out;
+}
 // 指定 booth_items のサムネを順次(=礼儀正しく)ダウンロード。skip-if-exists。
 async function cacheBoothThumbs(items: BoothItemRow[], cacheDir: string): Promise<{ ok: number; skip: number; fail: number }> {
-  let ok = 0, skip = 0, fail = 0;
+  let ok = 0, skip = 0;
   for (const b of items) {
-    // http(s) のみ取得対象。AvatarExplorer等のローカルパスは fetch 不可なので対象外。
-    if (!b.thumbnail_url || !/^https?:\/\//i.test(b.thumbnail_url)) continue;
-    const dest = cachedThumbPath(cacheDir, b.booth_item_id, b.thumbnail_url);
-    if (existsSync(dest)) { skip++; continue; }
-    if (await downloadImage(b.thumbnail_url, dest)) ok++; else fail++;
+    // http(s) の商品画像を取得(image0＋詳細カルーセル用の追加画像)。AvatarExplorer等のローカルパスは対象外。
+    let urls: string[] = [];
+    try { urls = b.image_urls_json ? JSON.parse(b.image_urls_json) as string[] : []; } catch { /* 壊れ無視 */ }
+    if (!urls.length && b.thumbnail_url) urls = [b.thumbnail_url];
+    urls = urls.filter(u => /^https?:\/\//i.test(u));
+    if (!urls.length) continue;
+    // 画像単位で skip-if-exists(cacheItemImages内)。旧スキームで image0 のみ持つ商品も追加画像を backfill する。
+    if (await cacheItemImages(cacheDir, b.booth_item_id, urls)) ok++; else skip++;
   }
-  return { ok, skip, fail };
+  return { ok, skip, fail: 0 };
 }
 
 // ---------- カタログ描画 ----------
@@ -935,67 +967,77 @@ function renderCard(p: Product, imgSrc: string, imgKind: string, booth: BoothCar
     `<div class="meta">${mb(r.size_bytes)} ・ ${r.file_count} files ・ prev ${r.preview_pct}%</div>${shaderBadges(r)}${boothLine}${badge}</div>`;
 }
 
-function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = [], booth: BoothCard | null = null): string {
+// 詳細(右スライドオーバー・2カラム)。左=BOOTH画像カルーセル+忠実3D、右=商品情報+導入台帳+重複/別版。
+function renderDetail(p: Product, treeHtml: string, gallery: string[], render: { heroUri: string; viewerHref: string; prefabThumbs?: string[] }, versions: { name: string; installed: boolean }[] = [], booth: BoothCard | null = null, boothImages: string[] = []): string {
   const r = p.rep;
   const kinds = JSON.parse(r.kind_breakdown) as Record<string, number>;
   const chips = Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join('');
-  const hero = gallery[0] ?? '';
   const dup = p.copyCount > 1 ? `<span class="dup">コピー×${p.copyCount}</span>` : '';
-  // 🎬 生成ボタン/忠実プレビュー欄は「3Dモデル」のみ(シェーダ/SDK/アニメは3Dプレビュー対象外)。
-  // ただし既に焼いた成果物があるならカテゴリに関わらず表示する。
+  const adult = !!(booth && booth.adult);
+
+  // ヒーロー画像群: BOOTH商品画像(キャッシュ) → 忠実3D hero → preview。カルーセルで切替。
+  const imgs: string[] = [...boothImages];
+  if (render.heroUri) imgs.push(render.heroUri);
+  for (const t of (render.prefabThumbs ?? [])) imgs.push(t);   // 複数prefab(方式A)のサムネもカルーセルに含める
+  for (const g of gallery) imgs.push(g);
+  const prefabN = render.prefabThumbs ? render.prefabThumbs.length : 0;
+  const mainSrc = imgs[0] ?? '';
+  const heroBox = mainSrc
+    ? `<div class="dhero2"><img id="dmain" class="dmainimg${adult ? ' nsfw' : ''}" src="${mainSrc}">${adult ? '<button class="nsfwtag" onclick="event.stopPropagation();hangarRevealDetail()">🔞 タップで表示</button>' : ''}</div>`
+    : `<div class="dhero2"><div class="ph cat-${esc(p.category)}"><span class="phl">画像なし</span></div></div>`;
+  const strip = imgs.length > 1
+    ? `<div class="dstrip">${imgs.map((u, idx) => `<img class="dsth${idx === 0 ? ' on' : ''}${adult ? ' nsfw' : ''}" data-full="${u}" src="${u}" onclick="hangarSwap(this)">`).join('')}</div>`
+    : '';
+
   const genBtn = p.category === 'model'
-    ? `<button class="genbtn-d" onclick="hangarRender(CUR)" title="裏でUnity+lilToonを起動し、忠実プレビュー画像と3D(GLB)を生成します（数分）">🎬 ${render.heroUri ? '3Dを再生成' : 'この商品を3D生成'}</button>`
+    ? `<button class="genbtn-d" onclick="hangarRender(CUR)" title="裏でUnity+lilToonを起動し忠実プレビュー画像と3D(GLB)を生成(数分)">🎬 ${render.heroUri ? '3Dを再生成' : '3D生成'}</button>`
     : '';
-  const thumbN = render.prefabThumbs ? render.prefabThumbs.length : 0;
-  const ffthumbs = thumbN > 1
-    ? `<div class="ffthumbs">${render.prefabThumbs!.map((t, i) => `<img class="ffth" src="${t}" loading="lazy" title="プレハブ ${i + 1}">`).join('')}</div>`
-    : '';
-  const countBadge = thumbN > 1 ? ` <span class="ffcount">プレハブ ${thumbN}体</span>` : '';
-  const viewerLabel = thumbN > 1 ? `▶ 3Dで回す（${thumbN}体・切替可）` : '▶ 3Dで回す（GLB・Unity不要）';
-  const faithful = render.heroUri
-    ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）${countBadge}</h3><div class="faithful"><img class="ffimg" src="${render.heroUri}">` + ffthumbs +
-      (render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">${viewerLabel}</a>` : '') + genBtn + `</div>`
-    : (p.category === 'model'
-      ? `<h3>忠実プレビュー（方式A：本物のlilToonでUnity焼き）</h3><div class="faithful"><div class="none">まだ生成していません（Unity + lilToon があれば本物のシェーダで焼けます）。</div>${genBtn}</div>`
-      : '');
+  const view3d = render.viewerHref ? `<a class="btn3d" href="${render.viewerHref}" target="_blank" rel="noopener">▶ 3Dで回す${prefabN > 1 ? `（${prefabN}体・切替可）` : ''}</a>` : '';
+  const preimport = `<button class="btnpre" onclick="hangarDiff(CUR)" title="この商品を取り込む前に既存プロジェクトとの衝突/ピンク危険をチェック">🛡 取り込み前チェック</button>`;
+
   const inst = p.projects.length
     ? `<table class="ledger"><tr><th>プロジェクト</th><th>一致</th><th>パス</th></tr>` +
       p.projects.map(pr => `<tr><td>${esc(pr.name)}</td><td class="pct">${pr.pct}%</td><td class="pth">${esc(pr.path)}</td></tr>`).join('') + `</table>`
     : `<div class="none">どのプロジェクトにも導入されていません</div>`;
   const copies = p.copyCount > 1
-    ? `<h3>重複コピー（${p.copyCount}個・無駄 ${mb(p.wastedBytes)} ＝1個残して削除可）</h3><div class="copies">` +
+    ? `<h3>⧉ 重複コピー（${p.copyCount}個・無駄 ${mb(p.wastedBytes)}）</h3><div class="copies">` +
       p.copies.map(c => `<div class="cp">${esc(c)}</div>`).join('') + `</div>`
     : '';
   const gal = gallery.length ? `<div class="gallery">${gallery.map(g => `<img src="${g}" loading="lazy">`).join('')}</div>` : `<div class="none">preview.png なし</div>`;
-  // 別の版: 同名/類似名(版サフィックス除去後の基底名が一致)で中身(sig)が違う商品＝更新版や別バリエーション
   const verSec = versions.length
     ? `<h3>🔀 別の版がライブラリにあります（${versions.length}）</h3><div class="copies">` +
       versions.map(v => `<div class="cp">${esc(v.name)}${v.installed ? ' <span class="chip">導入中</span>' : ''}</div>`).join('') +
-      `<div class="none" style="margin-top:6px">同名/類似名で中身(GUID)が違う＝更新版や別バリエーションの可能性。「📦 取り込み前チェック」でどれを入れるべきか確認できます。</div></div>`
+      `<div class="none" style="margin-top:6px">同名/類似名で中身(GUID)が違う＝更新版や別バリエーションの可能性。</div></div>`
     : '';
-  // BOOTH商品情報(紐付けがあれば)。通信せず保存済みメタのみ。「BOOTHで開く」は外部ブラウザへ(setWindowOpenHandler経由)。
+  // BOOTH商品情報(紐付けがあれば)。保存済みメタのみ。「BOOTHで開く」は外部ブラウザへ(setWindowOpenHandler経由)。
   const boothSec = booth
-    ? `<h3>🛒 BOOTH 商品情報</h3><div class="boothinfo">` +
-      `<div class="brow"><span class="bk">商品名</span> ${esc(booth.name)}</div>` +
-      (booth.creator ? `<div class="brow"><span class="bk">作者</span> ${esc(booth.creator)}</div>` : '') +
-      `<div class="brow"><span class="bk">種別</span> ${esc(booth.typeLabel)}</div>` +
+    ? `<div class="boothinfo">` +
+      `<div class="brow"><span class="bk">作者</span> ${esc(booth.creator || '?')}</div>` +
+      `<div class="brow"><span class="bk">種別</span> ${esc(booth.typeLabel)}${adult ? ' ・ <span class="r18">R-18</span>' : ''}</div>` +
       (booth.publishedAt ? `<div class="brow"><span class="bk">公開</span> ${new Date(booth.publishedAt).toISOString().slice(0, 10)}</div>` : '') +
       (booth.tags.length ? `<div class="brow"><span class="bk">タグ</span> ${booth.tags.slice(0, 12).map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : '') +
       (booth.itemUrl ? `<div class="brow"><a class="booth-open" href="${esc(booth.itemUrl)}" target="_blank" rel="noopener">BOOTHで開く ↗</a></div>` : '') +
-      `<div class="bnote">取得元: ${esc(booth.source)}${booth.placeholder ? ' ・ メタ未取得（「🛒 BOOTHメタ補完」で公開情報を取得できます）' : ''}</div>` +
+      `<div class="bnote">取得元: ${esc(booth.source)}${booth.placeholder ? ' ・ メタ未取得（「🛒 BOOTHメタ補完」で公開情報を取得）' : ''}</div>` +
       `</div>`
     : '';
-  return `<div class="dhead">${hero ? `<img class="dhero" src="${hero}">` : ''}<div><h2>${esc(r.file_name)} ${dup}</h2>` +
-    `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}<div class="chips">${chips}</div></div></div>` +
-    boothSec +
-    faithful +
-    `<h3>導入先（取り込み後の追跡）</h3>${inst}` +
-    copies + verSec +
-    `<h3>中身（ファイル構成・100%表示）</h3><div class="tree">${treeHtml}</div>` +
-    `<h3>プレビュー画像（${gallery.length}）</h3>${gal}`;
+
+  return `<div class="dgrid">` +
+    `<div class="dleft">${heroBox}${strip}<div class="dacts">${view3d}${genBtn}${preimport}</div></div>` +
+    `<div class="dright">` +
+      `<h2>${booth ? esc(booth.name) : esc(r.file_name)} ${dup}</h2>` +
+      `<div class="meta">${catBadge(p.category)} ${mb(r.size_bytes)} ・ ${r.file_count} files ・ preview ${r.preview_pct}%</div>${shaderBadges(r)}` +
+      `<div class="dfn">${esc(r.file_name)}</div>` +
+      boothSec +
+      `<h3>🎯 導入先（取り込み後の追跡）</h3>${inst}` +
+      copies + verSec +
+    `</div>` +
+  `</div>` +
+  `<h3>中身（ファイル構成・100%表示）</h3><div class="tree">${treeHtml}</div>` +
+  `<h3>プレビュー画像（${gallery.length}）</h3>${gal}` +
+  `<div class="chips" style="margin-top:8px">${chips}</div>`;
 }
 
-function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number }[], count: number, projectCount = 0): string {
+function renderApp(data: { card: string; detail: string; name: string; tags: string; sig: string; category: string; sizeBytes: number; copyCount: number; filePath: string }[], count: number, projectCount = 0): string {
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
   // サイドバー/インサイトの件数は生成時に data から集計(=正確・追加IPC/フレーム跨ぎ同期なし)。tags は空白区切りの素文字列。
   const hasTag = (t: string, tag: string) => (' ' + t + ' ').includes(' ' + tag + ' ');
@@ -1034,14 +1076,23 @@ body{background:#16161a;color:#e8e8ea;font-family:system-ui,'Segoe UI',sans-seri
 .sfoot{font-size:10px;color:#6a6a72;padding:12px 10px;line-height:1.6;border-top:1px solid #2a2a32;margin-top:10px}
 #topbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 18px;border-bottom:1px solid #2a2a32;position:sticky;top:0;background:#16161a;z-index:6}
 #topbar select{background:#23232b;border:1px solid #3a3a44;color:#ddd;border-radius:7px;padding:6px 8px;font-size:12px;cursor:pointer}
+.pop{position:relative}
+.popbtn{background:#23232b;border:1px solid #3a3a44;color:#ddd;border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer}
+.popbtn.active{background:#4a6cf7;color:#fff;border-color:#4a6cf7}
+.facetpop{position:absolute;top:112%;left:0;background:#1e1e24;border:1px solid #3a3a44;border-radius:8px;padding:6px 10px;display:none;z-index:9;min-width:150px;box-shadow:0 10px 28px #0008}
+.facetpop.open{display:block}
+.facetpop label{display:flex;gap:8px;align-items:center;font-size:12px;padding:4px 2px;cursor:pointer;color:#cfcfd6}
 #insight{padding:8px 18px;color:#cfcfd6;font-size:12px;background:#1a1a20;border-bottom:1px solid #2a2a32}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;padding:18px}
 body.compact .grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;padding:12px}
 .card{position:relative;background:#1e1e24;border:1px solid #2a2a32;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .1s}
 .card:hover{border-color:#4a6cf7}
-.genbtn{position:absolute;top:6px;right:6px;background:#4a6cf7e6;border:0;color:#fff;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
+.genbtn{position:absolute;top:6px;right:40px;background:#4a6cf7e6;border:0;color:#fff;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
 .card:hover .genbtn,.card:focus-within .genbtn,.genbtn:focus{opacity:1}
 .genbtn:hover{background:#5a78ff}
+.pcbtn{position:absolute;top:6px;right:6px;background:#3a2f23e6;border:0;color:#e7c89a;border-radius:7px;padding:4px 8px;font-size:13px;cursor:pointer;opacity:.5;transition:opacity .12s;z-index:2}
+.card:hover .pcbtn,.card:focus-within .pcbtn,.pcbtn:focus{opacity:1}
+.pcbtn:hover{background:#4a3d2c}
 .genbtn-d{background:#4a6cf7;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer;margin-left:10px}
 .genbtn-d:hover{background:#5a78ff}
 body.no-render .genbtn{opacity:.32;filter:grayscale(1)}
@@ -1051,7 +1102,6 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .catb{position:absolute;top:6px;left:6px;font-size:11px;padding:2px 7px;border-radius:6px;font-weight:600;z-index:2}
 .cat-model{background:#234a3ae6;color:#9ae7c2}.cat-tool{background:#4a3a23e6;color:#e7c89a}
 .cat-animation{background:#3a2a4ae6;color:#c3b6ff}.cat-material{background:#23354ae6;color:#9ac2e7}.cat-other{background:#2a2a32e6;color:#9a9aa2}
-.dhead .catb{position:static;display:inline-block}
 .thumb img{width:100%;height:100%;object-fit:contain}
 .thumb img.cover{object-fit:cover}
 .thumb img.nsfw{filter:blur(22px) brightness(.82)}
@@ -1084,11 +1134,30 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 #count{color:#888;font-size:12px}
 .chip{background:#2a2a34;color:#bdbdc6;font-size:10px;padding:1px 6px;border-radius:99px;margin:0 4px 4px 0;display:inline-block}
 .chips{margin-top:4px}
-.detail{padding:18px 24px;max-width:1100px}
+/* Phase3: 詳細は右スライドオーバー(グリッドは背後に残る)・2カラム・BOOTH画像カルーセル */
+#backdrop{position:fixed;inset:0;background:#0007;z-index:19;display:none}
+#backdrop.open{display:block}
+.detail{position:fixed;top:0;right:0;width:min(880px,96%);height:100%;overflow:auto;background:#16161a;border-left:1px solid #2a2a32;box-shadow:-14px 0 44px #0009;padding:16px 22px;z-index:20;transform:translateX(100%);transition:transform .18s ease}
+.detail.open{transform:translateX(0)}
+.dgrid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:20px;align-items:start;margin-top:8px}
+.dleft{position:sticky;top:0}
+.dhero2{aspect-ratio:1/1;background:#0e0e12;border-radius:10px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.dmainimg{width:100%;height:100%;object-fit:contain}
+.dmainimg.nsfw{filter:blur(26px) brightness(.82)}
+.dmainimg.nsfw.revealed{filter:none}
+.dstrip{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.dsth{width:56px;height:56px;object-fit:cover;background:#0e0e12;border:1px solid #2a2a32;border-radius:6px;cursor:pointer;opacity:.7}
+.dsth:hover{opacity:1}.dsth.on{border-color:#4a6cf7;opacity:1}
+.dsth.nsfw{filter:blur(10px) brightness(.82)}.dsth.nsfw.revealed{filter:none}
+.dacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.btnpre{background:#3a2f23;color:#e7c89a;border:1px solid #5a4a2a;border-radius:8px;padding:9px 14px;font-size:13px;cursor:pointer}
+.btnpre:hover{background:#4a3d2c}
+.dright .catb{position:static;display:inline-block}
+.dfn{color:#8a8a92;font-size:11px;word-break:break-all;margin:2px 0 4px;font-family:ui-monospace,Consolas,monospace}
+.r18{color:#ff9aa8;font-weight:600}
+@media(max-width:720px){.dgrid{grid-template-columns:1fr}.dleft{position:static}}
 .back{background:#2a2a34;color:#ddd;border:1px solid #3a3a44;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px;margin-bottom:14px}
 .back:hover{background:#33333e}
-.dhead{display:flex;gap:18px;align-items:flex-start;margin-bottom:6px}
-.dhero{width:180px;height:180px;object-fit:contain;background:#0e0e12;border-radius:8px;flex:0 0 auto}
 .detail h2{margin:0 0 6px;font-size:18px;word-break:break-all}
 .detail h3{margin:22px 0 8px;font-size:13px;color:#9aa;border-bottom:1px solid #2a2a32;padding-bottom:4px}
 .none{color:#777;font-size:12px}
@@ -1110,11 +1179,6 @@ body.no-render .genbtn-d::after{content:'（要 Unity 2022.3 + lilToon）';font-
 .tree .k-script{background:#4a2d3a;color:#e7a6c2}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
 .gallery img{width:100%;aspect-ratio:1/1;object-fit:contain;background:#0e0e12;border-radius:6px}
-.faithful{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:4px}
-.ffimg{width:260px;max-width:100%;border-radius:8px;background:#0e0e12}
-.ffcount{font-size:12px;color:#9ae7c2;background:#234a3a;border-radius:99px;padding:1px 9px;margin-left:6px;vertical-align:middle}
-.ffthumbs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%;margin-top:4px}
-.ffthumbs .ffth{width:72px;height:72px;object-fit:contain;background:#0e0e12;border:1px solid #2a2a32;border-radius:6px}
 .btn3d{display:inline-block;background:#4a6cf7;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px}
 .btn3d:hover{background:#5a78ff}
 .copies{font-size:11px;font-family:ui-monospace,Consolas,monospace}
@@ -1149,11 +1213,23 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
     <input id="q" type="search" placeholder="商品名・作者で検索…">
     <select id="sort" title="並び替え"><option value="name">名前順</option><option value="size">サイズが大きい順</option><option value="dup">重複が多い順</option></select>
     <select id="density" title="表示密度"><option value="comfortable">標準表示</option><option value="compact">密に表示</option></select>
+    <div class="pop"><button id="facetbtn" class="popbtn" title="複数条件のAND絞り込み">絞り込み ▾</button>
+      <div id="facetpop" class="facetpop">
+        <label><input type="checkbox" data-facet="installed">導入済</label>
+        <label><input type="checkbox" data-facet="notinstalled">未導入</label>
+        <label><input type="checkbox" data-facet="dup">重複あり</label>
+        <label><input type="checkbox" data-facet="poiyomi">要Poiyomi</label>
+        <label><input type="checkbox" data-facet="liltoon">要lilToon</label>
+        <label><input type="checkbox" data-facet="locked">ロック済</label>
+        <label><input type="checkbox" data-facet="booth">BOOTH紐付</label>
+      </div>
+    </div>
     <span id="count"></span>
   </div>
   <div id="insight">${insight}</div>
   <div id="grid" class="grid"></div>
-  <div id="detail" class="detail" style="display:none"></div>
+  <div id="backdrop"></div>
+  <div id="detail" class="detail"></div>
   <footer>preview.png は作者環境で生成された参考画像。忠実プレビューは方式A（裏でUnity焼き）で別途生成。クリックで詳細。 ・ 🛒公開BOOTHのサムネ/情報を取得（購入ファイルは送信しません・読み取り専用）。</footer>
 </main>
 </div>
@@ -1161,22 +1237,34 @@ footer{color:#666;font-size:11px;padding:10px 24px;border-top:1px solid #2a2a32}
 const DATA = ${json};
 const grid = document.getElementById('grid'), detail = document.getElementById('detail');
 const q = document.getElementById('q'), countEl = document.getElementById('count');
-let scope = '', smart = '', sortKey = 'name', density = 'comfortable';
+let scope = '', smart = '', sortKey = 'name', density = 'comfortable', facets = [];
 let CUR = -1;
 const sortSel = document.getElementById('sort'), densSel = document.getElementById('density');
+const facetbtn = document.getElementById('facetbtn'), facetpop = document.getElementById('facetpop');
 const mainEl = document.getElementById('main');
 // 状態保持: 再スキャン/検出/3D生成のたびに iframe が再読込されても 検索/絞り込み/並び/密度/詳細/スクロール を復元する。
 const SKEY = 'hangar-cat-state';
-function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q:q.value, scope:scope, smart:smart, sortKey:sortKey, density:density, open:(detail.style.display!=='none'&&CUR>=0&&DATA[CUR])?DATA[CUR].sig:null, scroll:(mainEl?mainEl.scrollTop:0)||0 })); }catch(e){} }
-function showGrid(){ detail.style.display='none'; grid.style.display='grid'; CUR=-1; saveState(); }
-function showDetail(i){ CUR=i; detail.innerHTML='<button class="back" onclick="showGrid()">← 一覧へ</button>'+DATA[i].detail; grid.style.display='none'; detail.style.display='block'; if(mainEl)mainEl.scrollTop=0; saveState(); }
+var backdrop = document.getElementById('backdrop');
+function saveState(){ try{ localStorage.setItem(SKEY, JSON.stringify({ q:q.value, scope:scope, smart:smart, sortKey:sortKey, density:density, facets:facets, open:(detail.classList.contains('open')&&CUR>=0&&DATA[CUR])?DATA[CUR].sig:null, scroll:(mainEl?mainEl.scrollTop:0)||0 })); }catch(e){} }
+// Phase3: 詳細は右スライドオーバー。グリッドは背後に残す(隠さない)。
+function showGrid(){ detail.classList.remove('open'); if(backdrop)backdrop.classList.remove('open'); CUR=-1; saveState(); }
+function showDetail(i){ CUR=i; detail.innerHTML='<button class="back" onclick="showGrid()">✕ 閉じる</button>'+DATA[i].detail; detail.classList.add('open'); if(backdrop)backdrop.classList.add('open'); detail.scrollTop=0; saveState(); }
 // 商品を指定して3D生成を親(Electronシェル)へ依頼（名前入力不要）。sig=内容署名で厳密に対象を同定。
 function hangarRender(i){ if(i==null||i<0||!DATA[i])return; try{ (window.parent||window).postMessage({type:'hangar-render', sig:DATA[i].sig, name:DATA[i].name}, '*'); }catch(e){} }
 function hangarReveal(b){ var img=b.parentElement&&b.parentElement.querySelector('img.nsfw'); if(img) img.classList.add('revealed'); b.remove(); }
+// 詳細のR-18一括表示(ヒーロー＋サムネストリップの .nsfw を全解除)。
+function hangarRevealDetail(){ var d=document.getElementById('detail'); if(d) d.querySelectorAll('.nsfw').forEach(function(x){x.classList.add('revealed');}); }
 // サイドバーのアクション行(スキャン/検出/テンプレ/比較/取込/補完/再スキャン)を親(シェル)へ委譲。
 function hangarAction(a){ try{ (window.parent||window).postMessage({type:'hangar-action', action:a}, '*'); }catch(e){} }
+// 詳細カルーセル: サムネクリックでメイン画像を差替。
+function hangarSwap(el){ var m=document.getElementById('dmain'); if(m&&el&&el.dataset.full){ m.src=el.dataset.full; } var s=el&&el.parentElement; if(s)s.querySelectorAll('.dsth').forEach(function(x){x.classList.remove('on');}); if(el)el.classList.add('on'); }
+// 取り込み前チェックを親(シェル)へ委譲。対象商品の.unitypackageパスを渡す(カード🛡/詳細🛡)。
+function hangarDiff(i){ if(i==null||i<0||!DATA[i]||!DATA[i].filePath)return; try{ (window.parent||window).postMessage({type:'hangar-diff', path:DATA[i].filePath, name:DATA[i].name}, '*'); }catch(e){} }
 addEventListener('message',function(e){var m=e.data;if(m&&m.type==='hangar-caps'){document.body.classList.toggle('no-render', m.canRender===false);}});
-grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
+grid.innerHTML = DATA.map((d,i)=>'<div class="card" data-name="'+d.name.toLowerCase().replace(/"/g,'&quot;')+'" data-tags="'+d.tags+'" onclick="showDetail('+i+')">'+d.card+'<button class="pcbtn" title="取り込み前チェック(既存プロジェクトとの衝突/ピンク危険)" onclick="event.stopPropagation();hangarDiff('+i+')">🛡</button>'+(d.category==='model'?'<button class="genbtn" title="この商品を3D生成（忠実プレビューを焼く）" onclick="event.stopPropagation();hangarRender('+i+')">🎬</button>':'')+'</div>').join('');
+if(backdrop) backdrop.addEventListener('click', showGrid);
+// カタログ(iframe)にフォーカスがある時の Ctrl+K を親のコマンドパレットへ転送(shell側は自frameしか拾えないため)。
+document.addEventListener('keydown',function(e){ if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&(e.key==='k'||e.key==='K')){ e.preventDefault(); hangarAction('palette'); } });
 const cards = [...grid.children];
 function matchSmart(c){
   if(!smart) return true;
@@ -1191,6 +1279,7 @@ function applyFilter(){
     var okText=!term||c.dataset.name.includes(term);
     var okScope=!scope||(' '+c.dataset.tags+' ').includes(' '+scope+' ');
     var vis=okText&&okScope&&matchSmart(c);
+    if(vis&&facets.length){ var ft=' '+c.dataset.tags+' '; for(var fi=0;fi<facets.length;fi++){ if(ft.indexOf(' '+facets[fi]+' ')<0){ vis=false; break; } } }
     c.style.display=vis?'':'none'; if(vis)shown++;
   }
   countEl.textContent=shown+' / '+cards.length+' 件';
@@ -1213,6 +1302,11 @@ document.querySelectorAll('.srow.act').forEach(function(b){ b.addEventListener('
 q.addEventListener('input',function(){ applyFilter(); saveState(); });
 if(sortSel) sortSel.addEventListener('change',function(){ sortKey=sortSel.value; applySort(); saveState(); });
 if(densSel) densSel.addEventListener('change',function(){ density=densSel.value; document.body.classList.toggle('compact',density==='compact'); saveState(); });
+// AND絞り込みpopover(上級・初期非表示)。scope/smart/検索とANDで重ねる。
+function syncFacets(){ facets=[]; if(facetpop) facetpop.querySelectorAll('input[type=checkbox]').forEach(function(x){ if(x.checked) facets.push(x.dataset.facet); }); if(facetbtn){ facetbtn.classList.toggle('active',facets.length>0); facetbtn.textContent=facets.length?('絞り込み '+facets.length):'絞り込み ▾'; } }
+if(facetbtn) facetbtn.addEventListener('click',function(e){ e.stopPropagation(); if(facetpop) facetpop.classList.toggle('open'); });
+if(facetpop) facetpop.querySelectorAll('input[type=checkbox]').forEach(function(x){ x.addEventListener('change',function(){ syncFacets(); applyFilter(); saveState(); }); });
+document.addEventListener('click',function(e){ if(facetpop&&facetpop.classList.contains('open')&&!facetpop.contains(e.target)&&e.target!==facetbtn){ facetpop.classList.remove('open'); } });
 var _scrollT; if(mainEl) mainEl.addEventListener('scroll',function(){ clearTimeout(_scrollT); _scrollT=setTimeout(saveState,200); });
 // 読込時の復元: 検索/絞り込み/並び/密度を当て、#open=sig(3D生成後の復帰)を最優先、無ければ前回の詳細/スクロール。
 (function restore(){
@@ -1225,12 +1319,14 @@ var _scrollT; if(mainEl) mainEl.addEventListener('scroll',function(){ clearTimeo
     if(st.smart){ var sm=document.querySelector('.srow.sl[data-sl="'+st.smart+'"]'); if(sm){ smart=st.smart; document.querySelectorAll('.srow.sl').forEach(function(x){x.classList.toggle('on',x.dataset.sl===smart);}); } else { smart=''; } }
     if(st.sortKey){ sortKey=st.sortKey; if(sortSel)sortSel.value=sortKey; }
     if(st.density){ density=st.density; if(densSel)densSel.value=density; document.body.classList.toggle('compact',density==='compact'); }
+    if(st.facets&&st.facets.length&&facetpop){ st.facets.forEach(function(f){ var cb=facetpop.querySelector('input[data-facet="'+f+'"]'); if(cb)cb.checked=true; }); syncFacets(); }
   }
   applySort(); applyFilter();
+  // スライドオーバーはグリッドを隠さないので、詳細を開く前に背後グリッドのスクロールを先に復元する。
+  if(st&&st.scroll&&mainEl){ mainEl.scrollTop=st.scroll; }
   var hm=/^#open=(.+)$/.exec(location.hash||''); var hs=hm?decodeURIComponent(hm[1]):null;
   if(hs){ var i=DATA.findIndex(function(d){return d.sig===hs;}); if(i>=0){ showDetail(i); return; } }
-  if(st&&st.open){ var j=DATA.findIndex(function(d){return d.sig===st.open;}); if(j>=0){ showDetail(j); return; } }
-  if(st&&st.scroll&&mainEl){ mainEl.scrollTop=st.scroll; }
+  if(st&&st.open){ var j=DATA.findIndex(function(d){return d.sig===st.open;}); if(j>=0){ showDetail(j); } }
 })();
 </script></body></html>`;
 }

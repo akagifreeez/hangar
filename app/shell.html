@@ -33,6 +33,9 @@ iframe{border:0;flex:1 1 auto;width:100%;background:#16161a}
 .ovhead b{font-size:13px;word-break:break-all;flex:1 1 220px}
 #diffproj{flex:0 1 300px;max-width:300px}
 .ovbody{padding:12px 16px;font-size:13px;line-height:1.6}
+.palrow{padding:9px 12px;border-radius:7px;cursor:pointer;font-size:14px;color:#e8e8ea}
+.palrow.on,.palrow:hover{background:#2a2a34}
+#palq{background:#2a2a34;border:1px solid #3a3a44;color:#eee;border-radius:6px;padding:8px 10px;font-size:14px}
 .dv{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700}
 .dv.danger{background:#5a2330;color:#ff9aa8}.dv.review{background:#4a3a23;color:#e7c89a}.dv.clean{background:#234a3a;color:#9ae7c2}
 .dsec{margin-top:14px}.dsec h4{margin:0 0 6px;font-size:13px}
@@ -152,6 +155,14 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       </div>
       <p class="dinfo" style="margin-top:12px"><b>ローカルで読み取り専用</b>。購入物を書き換えることはありません。表示用に公開BOOTHのサムネ・商品情報のみ取得します（購入ファイルは送信しません）。詳しい人向けの機能（テンプレ・プロジェクト比較）は「🛠 ツール」にあります。</p>
     </div>
+  </div>
+</div>
+
+<!-- コマンドパレット (Ctrl+K) -->
+<div id="paletteov" class="ov">
+  <div class="ovcard" style="max-width:560px">
+    <div class="ovhead"><input id="palq" placeholder="コマンドを検索… (例: スキャン / 検出 / 比較)" style="flex:1 1 auto"><button id="paletteclose" class="sec">Esc</button></div>
+    <div id="palist" class="ovbody" style="padding:6px"></div>
   </div>
 </div>
 
@@ -296,6 +307,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     const m = e.data;
     if (m && m.type === 'hangar-render' && (typeof m.sig === 'string' || typeof m.name === 'string')) runRender({ sig: m.sig, name: m.name });
     else if (m && m.type === 'hangar-action' && typeof m.action === 'string') handleSidebarAction(m.action);
+    else if (m && m.type === 'hangar-diff' && typeof m.path === 'string') openDiff(m.path);
   });
   // カタログ左サイドバー(iframe内)のアクション行 → 既存ハンドラへ委譲。ボタン要素は #hidden-actions に温存。
   // 各ハンドラは内部で BUSY を見るので二重ガードしない（help はいつでも可）。
@@ -309,6 +321,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       case 'compare': openCmp(); break;
       case 'importAe': $('importae').onclick(); break;
       case 'enrich': $('boothmeta').onclick(); break;
+      case 'palette': openPalette(); break;   // カタログiframeのCtrl+Kから転送される
     }
   }
 
@@ -653,13 +666,15 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
   }
 
   // 背景クリックでモーダルを閉じる(カード内のクリック/ドラッグは無視するため mousedown の発生元で判定)
-  for (const ovId of ['diffov','tmplov','cmpov','helpov']) {
+  for (const ovId of ['diffov','tmplov','cmpov','helpov','paletteov']) {
     $(ovId).addEventListener('mousedown', (e) => { if (e.target === $(ovId)) $(ovId).style.display = 'none'; });
   }
 
   // キーボード: Esc=閉じる(モーダル→エラーの順) / Ctrl+O=スキャン / Ctrl+D=取り込み前チェック / F5=再スキャン
   document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); ($('paletteov').style.display === 'flex') ? closePalette() : openPalette(); return; }
     if (e.key === 'Escape') {
+      if ($('paletteov').style.display === 'flex') { closePalette(); return; }
       if ($('diffov').style.display === 'flex') { $('diffov').style.display = 'none'; return; }
       if ($('tmplov').style.display === 'flex') { $('tmplov').style.display = 'none'; return; }
       if ($('cmpov').style.display === 'flex') { $('cmpov').style.display = 'none'; return; }
@@ -668,7 +683,7 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
       return;
     }
     // モーダル表示中はEsc以外のショートカットを無効化(背後の操作を防ぐ)
-    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex' || $('cmpov').style.display === 'flex' || $('helpov').style.display === 'flex') return;
+    if ($('diffov').style.display === 'flex' || $('tmplov').style.display === 'flex' || $('cmpov').style.display === 'flex' || $('helpov').style.display === 'flex' || $('paletteov').style.display === 'flex') return;
     // 入力欄にフォーカス中はショートカット無効
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -692,6 +707,42 @@ button.nudge{animation:nudge 1.3s ease-in-out infinite}
     g.style.display = open ? 'contents' : 'none';
     $('toolsbtn').textContent = open ? '🛠 ツール ▴' : '🛠 ツール ▾';
   };
+
+  // ---- コマンドパレット (Ctrl+K) ----
+  // act があるものは handleSidebarAction に委譲(dispatchを二重管理しない)。パレット固有のみ run。
+  const PAL = [
+    { label: '📁 ライブラリをスキャン', act: 'scan' },
+    { label: '🎯 プロジェクト検出', act: 'detect' },
+    { label: '🛡 取り込み前チェック', run: () => $('diffbtn').onclick() },
+    { label: '📥 他ツールから取込 (AvatarExplorer/KonoAsset)', act: 'importAe' },
+    { label: '🛒 BOOTHメタ補完', act: 'enrich' },
+    { label: '💾 テンプレ保存', act: 'template-save' },
+    { label: '♻ テンプレ復元', act: 'template-restore' },
+    { label: '🔀 プロジェクト比較・整理', act: 'compare' },
+    { label: '🔄 再スキャン', act: 'rescan' },
+    { label: '❓ ヘルプ', run: () => openHelp() },
+  ];
+  let palIdx = 0, palFiltered = PAL.slice();
+  function renderPal(){
+    const term = $('palq').value.trim().toLowerCase();
+    palFiltered = PAL.filter(p => !term || p.label.toLowerCase().includes(term));
+    palIdx = 0;
+    $('palist').innerHTML = palFiltered.length
+      ? palFiltered.map((p,i)=>'<div class="palrow'+(i===0?' on':'')+'" data-i="'+i+'">'+esc(p.label)+'</div>').join('')
+      : '<div class="dinfo" style="padding:10px">該当なし</div>';
+  }
+  function updatePalSel(){ const rows=[...$('palist').children]; rows.forEach((c,i)=>c.classList.toggle('on', i===palIdx)); const cur=rows[palIdx]; if(cur&&cur.scrollIntoView)cur.scrollIntoView({block:'nearest'}); }
+  function openPalette(){ $('paletteov').style.display='flex'; $('palq').value=''; renderPal(); setTimeout(()=>$('palq').focus(),0); }
+  function closePalette(){ $('paletteov').style.display='none'; }
+  function runPal(i){ const p=palFiltered[i]; if(p){ closePalette(); try{ p.act ? handleSidebarAction(p.act) : p.run(); }catch(e){} } }
+  $('palq').addEventListener('input', renderPal);
+  $('palq').addEventListener('keydown', (e) => {
+    if (e.key==='ArrowDown'){ e.preventDefault(); palIdx=Math.min(palIdx+1, palFiltered.length-1); updatePalSel(); }
+    else if (e.key==='ArrowUp'){ e.preventDefault(); palIdx=Math.max(palIdx-1,0); updatePalSel(); }
+    else if (e.key==='Enter'){ e.preventDefault(); runPal(palIdx); }
+  });
+  $('palist').addEventListener('click', (e) => { const r=e.target.closest('.palrow'); if(r) runPal(+r.dataset.i); });
+  $('paletteclose').onclick = closePalette;
 
   refreshCatalog();
 </script></body></html>
