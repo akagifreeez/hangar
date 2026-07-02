@@ -1,0 +1,86 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;width:600px;height:600px;overflow:hidden;background:#16161a}
+*{box-sizing:border-box;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+.stage{position:relative;width:600px;height:600px;font-family:"Yu Gothic UI","Segoe UI","Meiryo",system-ui,sans-serif;color:#e8e8ea;
+background:
+radial-gradient(120% 90% at 18% 8%, rgba(111,123,247,0.14), rgba(22,22,26,0) 46%),
+radial-gradient(110% 100% at 92% 96%, rgba(167,139,250,0.12), rgba(22,22,26,0) 50%),
+linear-gradient(180deg,#191920 0%,#16161a 58%,#131317 100%);
+}
+.frame{position:absolute;inset:22px;border:1px solid #23232b;border-radius:18px;pointer-events:none;
+box-shadow:inset 0 1px 0 rgba(255,255,255,0.02);}
+.pad{position:absolute;inset:0;padding:52px 50px;display:flex;flex-direction:column;height:100%;}
+/* top brand row */
+.brand{display:flex;align-items:center;gap:14px;}
+.brand img{width:54px;height:54px;border-radius:13px;display:block;
+box-shadow:0 6px 20px rgba(111,123,247,0.28),0 0 0 1px rgba(167,139,250,0.18);}
+.brandtext{display:flex;flex-direction:column;line-height:1;}
+.bname{font-weight:800;font-size:23px;letter-spacing:.5px;color:#f1f1f3;}
+.btag{font-weight:600;font-size:11.5px;color:#6a6a72;margin-top:6px;letter-spacing:.4px;}
+.chip{margin-left:auto;display:inline-flex;align-items:center;gap:7px;
+background:#1b1b20;border:1px solid #2a2a32;border-radius:999px;padding:8px 14px;
+font-weight:800;font-size:12px;color:#cfcfd6;letter-spacing:.4px;}
+.chip b{background:linear-gradient(90deg,#6f7bf7,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:#9ae7c2;box-shadow:0 0 8px rgba(154,231,194,.7);}
+/* hero */
+.hero{margin-top:44px;}
+.kicker{font-weight:700;font-size:14px;color:#9a9aa2;letter-spacing:1px;margin-bottom:14px;}
+.kicker .q{color:#c3b6ff;}
+.h1{font-weight:900;font-size:55px;line-height:1.16;letter-spacing:-0.5px;color:#f3f3f5;}
+.h1 .accent{background:linear-gradient(92deg,#6f7bf7 0%,#a78bfa 100%);
+-webkit-background-clip:text;background-clip:text;color:transparent;
+filter:drop-shadow(0 4px 22px rgba(123,113,247,0.35));}
+.rule{width:58px;height:4px;border-radius:3px;margin:30px 0 22px;
+background:linear-gradient(90deg,#6f7bf7,#a78bfa);box-shadow:0 0 16px rgba(123,113,247,.45);}
+.h2{font-weight:800;font-size:27px;color:#e8e8ea;line-height:1.32;letter-spacing:.2px;}
+.h2 .soft{color:#9a9aa2;font-weight:700;}
+/* secondary pink-prevention line */
+.pink{margin-top:22px;display:inline-flex;align-items:center;gap:10px;
+background:#1b1b20;border:1px solid #2a2a32;border-radius:12px;padding:13px 17px;
+font-weight:700;font-size:14.5px;color:#c8c8ce;max-width:430px;}
+.pink .pill{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;
+font-weight:900;font-size:12.5px;color:#c3b6ff;
+background:#241d3c;border:1px solid #3a3158;border-radius:8px;padding:5px 9px;}
+.pink em{font-style:normal;color:#c3b6ff;font-weight:800;}
+/* footer trust strip */
+.foot{margin-top:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.tmk{display:inline-flex;align-items:center;gap:6px;
+font-weight:700;font-size:11.5px;color:#9a9aa2;
+background:rgba(27,27,32,0.7);border:1px solid #26262e;border-radius:999px;padding:7px 12px;}
+.tmk .g{color:#9ae7c2;font-size:12px;}
+.unofficial{position:absolute;right:50px;bottom:46px;
+font-weight:700;font-size:10.5px;color:#5a5a62;letter-spacing:.6px;}
+</style></head><body>
+<div class="stage">
+  <div class="frame"></div>
+  <div class="pad">
+    <div class="brand">
+      <img src="__ICON_DATA_URI__" alt="Hangar">
+      <div class="brandtext">
+        <div class="bname">Hangar</div>
+        <div class="btag">VRChatアセット整理ツール</div>
+      </div>
+      <div class="chip"><span class="dot"></span><b>無料</b>&nbsp;/&nbsp;Windows&nbsp;10·11</div>
+    </div>
+
+    <div class="hero">
+      <div class="kicker">そのフォルダの中、<span class="q">.unitypackageだらけ。</span></div>
+      <div class="h1">買ったアバター、<br><span class="accent">どれだっけ？</span></div>
+      <div class="rule"></div>
+      <div class="h2">Unityを開かずに、まるごと整理。<br><span class="soft">サムネ表示・自動分類・重複検出。</span></div>
+
+      <div class="pink">
+        <span class="pill">🟣 ピンク化を予防</span>
+        <span>インポート前に<em>シェーダー競合</em>を検知</span>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="tmk"><span class="g">✅</span>完全ローカル</span>
+      <span class="tmk"><span class="g">✅</span>読み取り専用</span>
+      <span class="tmk"><span class="g">✅</span>外部送信なし</span>
+    </div>
+  </div>
+  <div class="unofficial">VRChat非公式 / Unofficial tool</div>
+</div>
+</body></html>

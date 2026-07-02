@@ -7,11 +7,17 @@ release/
 _shaders/
 _renderproj/
 
+# 内部用の設計/計画doc・テスト検体（手元に残すが公開repoには載せない）
+_planning/
+_fixtures/
+
 # 生成物・キャッシュ・DB（ユーザーデータ。リポジトリに入れない）
 cache/
 *.db
 *.db-wal
 *.db-shm
+*.db.bak
+*.bak
 gui-catalog.html
 *-catalog.html
 reclaim_plan.ps1
@@ -22,6 +28,8 @@ reclaim_plan.ps1
 # 開発時の一時物・スモーク
 gui_smoke.png
 smoke.log
+# render-cover.mjs がカバーHTMLをレンダ時に吐く一時物（誤コミット防止）
+*.filled.html
 probe.txt
 _cover_check.png
 app/probe*.cjs

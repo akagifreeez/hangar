@@ -1,0 +1,118 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;width:600px;height:600px;overflow:hidden;background:#16161a}
+*{box-sizing:border-box}
+.stage{position:relative;width:600px;height:600px;
+  font-family:"Yu Gothic UI","Meiryo","Segoe UI",system-ui,sans-serif;
+  color:#e8e8ea;
+  background:
+    radial-gradient(120% 90% at 18% 8%, rgba(111,123,247,.20) 0%, rgba(111,123,247,0) 46%),
+    radial-gradient(110% 80% at 92% 96%, rgba(167,139,250,.16) 0%, rgba(167,139,250,0) 50%),
+    radial-gradient(140% 120% at 50% 0%, #1d1d24 0%, #16161a 60%, #121216 100%);
+}
+.frame{position:absolute;inset:0;border:1px solid rgba(255,255,255,.04);pointer-events:none}
+.pad{position:absolute;inset:0;padding:30px 34px}
+
+/* top brand row */
+.brand{display:flex;align-items:center;gap:14px}
+.brand img{width:54px;height:54px;border-radius:13px;display:block;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.wm{display:flex;flex-direction:column;line-height:1}
+.wm .name{font-size:25px;font-weight:900;letter-spacing:.4px;color:#f2f2f4}
+.wm .tag{font-size:11.5px;font-weight:700;color:#8e8e98;margin-top:6px;letter-spacing:.3px}
+.chip{margin-left:auto;display:flex;align-items:center;gap:7px;
+  background:#1b1b20;border:1px solid #2a2a32;border-radius:99px;
+  padding:8px 14px;font-size:12px;font-weight:800;color:#cfcfd6}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:linear-gradient(135deg,#6f7bf7,#a78bfa);box-shadow:0 0 8px rgba(143,131,250,.8)}
+
+/* headline */
+.head{margin-top:30px}
+.head .kick{font-size:13px;font-weight:800;color:#9a9aa2;letter-spacing:1px;margin-bottom:12px}
+.head .kick b{color:#c3b6ff}
+.head h1{margin:0;font-size:40px;font-weight:900;line-height:1.28;letter-spacing:.2px;color:#f4f4f6}
+.grad{background:linear-gradient(110deg,#6f7bf7 0%,#a78bfa 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 18px rgba(143,131,250,.45))}
+.head .sub2{margin-top:14px;font-size:14px;font-weight:700;color:#9a9aa2;line-height:1.5}
+.head .sub2 .pk{color:#c3b6ff;font-weight:800}
+
+/* warning card mock */
+.card{position:absolute;left:34px;right:34px;bottom:96px;
+  background:linear-gradient(180deg,#1d1d23 0%,#1a1a1f 100%);
+  border:1px solid #2a2a32;border-radius:13px;
+  padding:14px 16px 15px;box-shadow:0 18px 40px rgba(0,0,0,.55)}
+.card .ch{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.card .fn{font-size:12.5px;font-weight:800;color:#e8e8ea;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flip:1}
+.card .arrow{color:#6a6a72;font-size:11.5px;font-weight:700;flex-shrink:0}
+.pill{margin-left:auto;flex-shrink:0;display:inline-block;padding:4px 12px;border-radius:99px;font-size:11.5px;font-weight:900;letter-spacing:.3px}
+.pill.danger{background:#5a2330;color:#ff9aa8}
+.row{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-top:1px solid #232329;font-size:13px;line-height:1.45}
+.row .ic{flex-shrink:0;font-size:13px;line-height:1.45}
+.row .tx{font-weight:700}
+.row .tx .mut{color:#8a8a92;font-weight:600;font-size:11.5px}
+.red .tx{color:#ff9aa8}
+.purple .tx{color:#c3b6ff}
+.orange .tx{color:#e7c89a}
+.safe{margin-top:9px;display:flex;align-items:center;gap:9px;
+  background:#1c3a2f;border:1px solid #2c5a47;border-radius:9px;padding:9px 12px}
+.safe .ic{font-size:14px}
+.safe .tx{font-size:12.5px;font-weight:800;color:#9ae7c2}
+.safe .tx b{color:#bff3d8}
+
+/* footer trust */
+.foot{position:absolute;left:34px;right:34px;bottom:30px;
+  display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.tk{font-size:11px;font-weight:800;color:#9a9aa2;
+  background:#1b1b20;border:1px solid #2a2a32;border-radius:7px;padding:6px 10px}
+.tk .g{color:#9ae7c2}
+.unof{margin-left:auto;font-size:10px;font-weight:700;color:#5e5e66;letter-spacing:.3px}
+</style></head><body>
+<div class="stage">
+  <div class="frame"></div>
+  <div class="pad">
+    <div class="brand">
+      <img src="__ICON_DATA_URI__" alt="Hangar">
+      <div class="wm">
+        <div class="name">Hangar</div>
+        <div class="tag">.unitypackage を、Unityなしで整理</div>
+      </div>
+      <div class="chip"><span class="dot"></span>無料・Windows 10/11</div>
+    </div>
+
+    <div class="head">
+      <div class="kick">VRChat の購入アバターを買い集めている人へ</div>
+      <h1>取り込む前に、<br><span class="grad">&#8220;ピンク化&#8221;</span>を止める。</h1>
+      <div class="sub2">新しい .unitypackage を入れる<b style="color:#e8e8ea">その前に</b>、<span class="pk">シェーダ欠落＝ピンク化事故</span>を検知して警告。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ch">
+      <span class="fn">Frill_Onepiece_for_Avatars.unitypackage</span>
+      <span class="arrow">&#8594; MyAvatar</span>
+      <span class="pill danger">&#9888; 危険</span>
+    </div>
+    <div class="row red">
+      <span class="ic">&#128308;</span>
+      <span class="tx">lilToon が衝突します<span class="mut"> ／ 同梱版とGUID重複 → 参照ずれ</span></span>
+    </div>
+    <div class="row purple">
+      <span class="ic">&#128995;</span>
+      <span class="tx">Poiyomi が足りません<span class="mut"> ＝ このまま入れるとピンクになる</span></span>
+    </div>
+    <div class="row orange">
+      <span class="ic">&#128992;</span>
+      <span class="tx">既存マテリアルを 5 件 上書き<span class="mut"> ／ アンチェック推奨</span></span>
+    </div>
+    <div class="safe">
+      <span class="ic">&#9989;</span>
+      <span class="tx">対処してから取り込めば <b>ピンク化ゼロ</b>。事故ってから直すより速い。</span>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="tk"><span class="g">&#9679;</span> 完全ローカル</span>
+    <span class="tk"><span class="g">&#9679;</span> 読み取り専用</span>
+    <span class="tk"><span class="g">&#9679;</span> 外部送信なし</span>
+    <span class="unof">VRChat非公式ツール</span>
+  </div>
+</div>
+</body></html>
